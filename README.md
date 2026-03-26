@@ -60,14 +60,14 @@ OPENVAS_CLI_INSTALL_DIR="$HOME/bin" bash ./openvas-cli/install.sh install
 Upon installation, run：
 
 ```bash
-openvas-cli onboard` 
+openvas-cli onboard 
 ```
 
 > this is to start first time setup process and take essential information and saves a local config file `~/.config/openvas-cli/openvas-cli.conf`. The file is protected with permission `600` on Linux native filesystems.
 
 
 **Supported connection types**
-- `ssh`, default connection option. Useful specially when managing a remote OpenVAS instance.
+- `ssh`, default connection option. Useful specially when managing a remote OpenVAS instance. Follow on-screen instructions to enter remote ssh login credentail.
 - `tls`
 - `socket`, if choosen, work via unix socket with a local OpenVAS instance.
 
