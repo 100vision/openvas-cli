@@ -4,11 +4,13 @@ a Python wrapper around native `gvm-cli` from [GreenBone](https://greenbone.gith
 
 ## Prerequisites
 
-Before using `openvas-cli`, make sure these prerequisites are in place.
+Before using `openvas-cli`, make sure these prerequisites are in place. 
+
 
 1. `python3 3.9+`
 2. `gvm-tools 25.4.9`
 3. `gvm-cli 25.4.9`
+
 
 If missing, install these dependency packages for Ubuntu or Debian:
 
@@ -61,33 +63,21 @@ Upon installation, run：
 openvas-cli onboard` 
 ```
 
-this is to start first time setup process and take essential information and saves a local config file `~/.config/openvas-cli/openvas-cli.conf`
+> this is to start first time setup process and take essential information and saves a local config file `~/.config/openvas-cli/openvas-cli.conf`. The file is protected with permission `600` on Linux native filesystems.
 
-The file is written with permission `600` on Linux native filesystems.
 
-Supported connection types shown during setup: `[ssh|tls|socket]`
-
-If `socket` is selected, `onboard` tries common gvmd socket paths first. If more than one path is found, it lists them and lets you choose before confirming the final socket path. The final socket path must exist before onboarding can continue.
-
-At the end of onboarding, the CLI prints the saved config file location and suggested next commands.
+**Supported connection types**
+- `ssh`, default connection option. Useful specially when managing a remote OpenVAS instance.
+- `tls`
+- `socket`, if choosen, work via unix socket with a local OpenVAS instance.
 
 
 
 ## Quick Start
 
-Shortest path from install to first scan:
+Quick scan:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv pipx
-python3 -m pip install gvm-tools
-export PATH="$HOME/.local/bin:$PATH"
-
-bash ./openvas-cli/install.sh install
-openvas-cli onboard
-openvas-cli doctor
-openvas-cli credential list --filter "name~Windows"
-openvas-cli config list --details
 openvas-cli scan create --hosts 192.168.11.10-254 --credential WindowsServer --scan-config "Window-ClientOS" --port-range T:1-65535 --port-list "All IANA assigned TCP"
 
 ### create a scan task with built-in/preset port-list "All IANA assigned TCP"
@@ -149,7 +139,7 @@ filtered output be like:
 
 ## Usage Notes
 
-### Access to a running GreenBone Openvas instance 
+### Connection to a running GreenBone Openvas instance 
 
 SSH is the default transport if `--transport` and `OPENVAS_TRANSPORT` are not set.
 
