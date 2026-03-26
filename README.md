@@ -28,7 +28,7 @@ bash ./openvas-cli/install.sh status
 
 ## Installation
 
-Install the CLI into `~/.local/bin`:
+Install, simply run:
 
 ```bash
 bash ./openvas-cli/install.sh install
@@ -55,28 +55,23 @@ OPENVAS_CLI_INSTALL_DIR="$HOME/bin" bash ./openvas-cli/install.sh install
 
 ## Onboarding
 
-`onboard` walks through first time setup and saves a local config file.
+Upon installation, run：
 
-Default path:
+```bash
+openvas-cli onboard` 
+```
 
-`~/.config/openvas-cli/openvas-cli.conf`
+this is to start first time setup process and take essential information and saves a local config file `~/.config/openvas-cli/openvas-cli.conf`
 
 The file is written with permission `600` on Linux native filesystems.
 
-Supported connection types shown during setup:
-
-`[ssh|tls|socket]`
+Supported connection types shown during setup: `[ssh|tls|socket]`
 
 If `socket` is selected, `onboard` tries common gvmd socket paths first. If more than one path is found, it lists them and lets you choose before confirming the final socket path. The final socket path must exist before onboarding can continue.
 
 At the end of onboarding, the CLI prints the saved config file location and suggested next commands.
 
-Example:
 
-```bash
-openvas-cli onboard
-openvas-cli doctor
-```
 
 ## Quick Start
 
