@@ -1,6 +1,7 @@
 # openvas-cli
 
-a Python wrapper around native `gvm-cli` from [GreenBone](https://greenbone.github.io/gvm-tools/index.html)
+-  A comand-line tool, to manage a live OpenVAS instance either locally or remotely.
+-  Python wrapper around native `gvm-cli` from [GreenBone](https://greenbone.github.io/gvm-tools/index.html) 
 
 ## Prerequisites
 
