@@ -14,7 +14,7 @@ If missing, install these dependency packages for Ubuntu or Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv pipx
+sudo apt-get install -y python3 python3-pip python3-venv
 python3 -m install gvm-tools
 ```
 
@@ -85,7 +85,7 @@ Shortest path from install to first scan:
 ```bash
 sudo apt-get update
 sudo apt-get install -y python3 python3-pip python3-venv pipx
-python3 -m pipx install gvm-tools
+python3 -m pip install gvm-tools
 export PATH="$HOME/.local/bin:$PATH"
 
 bash ./openvas-cli/install.sh install
@@ -93,7 +93,10 @@ openvas-cli onboard
 openvas-cli doctor
 openvas-cli credential list --filter "name~Windows"
 openvas-cli config list --details
-openvas-cli scan create --hosts 192.168.11.10-254 --credential Windows --scan-config "Full and fast" --port-range T:1-65535
+openvas-cli scan create --hosts 192.168.11.10-254 --credential WindowsServer --scan-config "Window-ClientOS" --port-range T:1-65535 --port-list "All IANA assigned TCP"
+
+### create a scan task with built-in/preset port-list "All IANA assigned TCP"
+openvas-cli scan create --hosts 192.168.11.10-254 --credential WindowsServer --scan-config "Window-ClientOS" --port-list "All IANA assigned TCP"
 ```
 
 ## Subcommands
@@ -111,41 +114,58 @@ openvas-cli scan create --hosts 192.168.11.10-254 --credential Windows --scan-co
 - `openvas-cli report-format list`
 - `openvas-cli scan create`
 
-Use `openvas-cli config list` to discover available scan configs. The CLI requests the full scan config set with `usage_type=scan` and disables default pagination before you choose one for `--scan-config`. Add `--details`, `--tasks`, or `--preferences` for richer output, or use `openvas-cli config get --name "Full and fast" --details`.
+Use `openvas-cli config list` to discover available scan configs. The CLI requests the full scan config set with `usage_type=scan` and disables default pagination before you choose one for `--scan-config`. Add `--details`, `--tasks`, or `--preferences` for richer output, or use `openvas-cli config get --name "Window-ClientOS" --details`.
 
 Examples:
 
 ```bash
 openvas-cli --json config list
-openvas-cli --compact-json config get --name "Full and fast" --details
+openvas-cli --compact-json config get --name "Window-ClientOS" --details
 ```
 
-## Common global options
+## Query Filtering
 
-`--env-file PATH`
-`--transport socket|tls|ssh` default is `ssh`
-`--gmp-username USER`
-`--gmp-password PASS`
-`--config ~/.config/gvm-tools.conf`
-`--socketpath /run/gvmd/gvmd.sock`
-`--hostname HOST`
-`--port PORT`
-`--ssh-username USER`
-`--ssh-password PASS`
-`--certfile FILE`
-`--keyfile FILE`
-`--cafile FILE`
-`--json` explicitly request JSON output
-`--compact-json` emit single-line JSON output
+- filter tasks by task status with a running state.
+```bash
+ openvas-cli --json task list --filter "status~running"
+```
+filtered output be like:
+
+```json
+{
+  "tasks": [
+    {
+      "config_id": "90247c21-5118-4150-95fe-96763f29a3eb",
+      "config_name": "Window-ClientOS",
+      "id": "c343d933-f8ca-452a-8e6b-ee7127592c67",
+      "last_report_id": "",
+      "name": "Scan 192.168.20.10-254",
+      "progress": "5",
+      "scanner_id": "08b69003-5fc2-4037-a479-93b440211c73",
+      "scanner_name": "OpenVAS Default",
+      "status": "Running",
+      "target_id": "6a732345-786e-4aae-9a95-3f99514669fb",
+      "target_name": "Target 192.168.20.10-254"
+    }
+  ]
+}
+
+```
 
 ## Usage Notes
 
+### Access to a running GreenBone Openvas instance 
+
 SSH is the default transport if `--transport` and `OPENVAS_TRANSPORT` are not set.
+
+### Scan Tasks
 
 `scan create` is the high level workflow.
 
 It will find or create the target, find or create the task, update mismatched target or task bindings, and start the task unless it is already running.
 
 For new targets, GMP 22.7 needs either `--port-list` or `--port-range`.
+
+### Scan Reporting and Exports
 
 `report get --format pdf` requires `--output` because the PDF is returned as base64 inside XML.
