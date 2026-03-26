@@ -482,6 +482,44 @@ def _build_parser() -> argparse.ArgumentParser:
     credential_list = credential_subparsers.add_parser("list")
     credential_list.add_argument("--filter")
 
+    credential_get = credential_subparsers.add_parser("get")
+    _add_lookup_arguments(credential_get)
+    credential_get.add_argument("--details", action="store_true")
+
+    credential_create = credential_subparsers.add_parser("create")
+    credential_create.add_argument("--name", required=True)
+    credential_create.add_argument("--type", required=True, choices=["up", "usk", "snmp"], help="Credential type: up=username+password, usk=username+ssh-key, snmp=snmp")
+    credential_create.add_argument("--comment")
+    credential_create.add_argument("--username")
+    credential_create.add_argument("--password")
+    credential_create.add_argument("--private-key", dest="private_key")
+    credential_create.add_argument("--passphrase")
+    credential_create.add_argument("--community")
+    credential_create.add_argument("--snmp-username", dest="snmp_username")
+    credential_create.add_argument("--snmp-auth-password", dest="snmp_auth_password")
+    credential_create.add_argument("--snmp-auth-protocol", dest="snmp_auth_protocol", choices=["md5", "sha1"])
+    credential_create.add_argument("--snmp-priv-password", dest="snmp_priv_password")
+    credential_create.add_argument("--snmp-priv-protocol", dest="snmp_priv_protocol", choices=["aes", "des", "none"])
+
+    credential_update = credential_subparsers.add_parser("update")
+    _add_lookup_arguments(credential_update)
+    credential_update.add_argument("--set-name", dest="set_name")
+    credential_update.add_argument("--comment")
+    credential_update.add_argument("--username")
+    credential_update.add_argument("--password")
+    credential_update.add_argument("--private-key", dest="private_key")
+    credential_update.add_argument("--passphrase")
+    credential_update.add_argument("--community")
+    credential_update.add_argument("--snmp-username", dest="snmp_username")
+    credential_update.add_argument("--snmp-auth-password", dest="snmp_auth_password")
+    credential_update.add_argument("--snmp-auth-protocol", dest="snmp_auth_protocol", choices=["md5", "sha1"])
+    credential_update.add_argument("--snmp-priv-password", dest="snmp_priv_password")
+    credential_update.add_argument("--snmp-priv-protocol", dest="snmp_priv_protocol", choices=["aes", "des", "none"])
+
+    credential_delete = credential_subparsers.add_parser("delete")
+    _add_lookup_arguments(credential_delete)
+    credential_delete.add_argument("--force", action="store_true")
+
     report_format = subparsers.add_parser("report-format")
     report_format_subparsers = report_format.add_subparsers(dest="action")
     report_format_list = report_format_subparsers.add_parser("list")
@@ -656,6 +694,38 @@ def _generic_named_json(node: ET.Element) -> Dict:
         "id": node.attrib.get("id", ""),
         "name": node.findtext("name", default=""),
     }
+
+
+def _credential_json(node: ET.Element, include_details: bool = False) -> Dict:
+    cred_type = node.findtext("type", default="")
+    payload = {
+        "id": node.attrib.get("id", ""),
+        "name": node.findtext("name", default=""),
+        "type": cred_type,
+        "comment": node.findtext("comment", default=""),
+        "creation_time": node.findtext("creation_time", default=""),
+        "modification_time": node.findtext("modification_time", default=""),
+        "in_use": _text_to_bool(node.findtext("in_use", default="")),
+        "writable": _text_to_bool(node.findtext("writable", default="")),
+        "owner": _child_text(node, "owner", "name"),
+    }
+    if include_details:
+        login_elem = node.find("login")
+        if login_elem is not None:
+            payload["login"] = login_elem.text or ""
+        if cred_type in ("up", "usk"):
+            payload["allow_insecure"] = _text_to_bool(node.findtext("allow_insecure", default=""))
+        elif cred_type == "snmp":
+            payload["community"] = node.findtext("community", default="")
+            payload["auth_algorithm"] = node.findtext("auth_algorithm", default="")
+            privacy_elem = node.find("privacy")
+            if privacy_elem is not None:
+                payload["privacy_algorithm"] = privacy_elem.findtext("algorithm", default="")
+        if cred_type == "usk":
+            public_key_elem = node.find("public_key")
+            if public_key_elem is not None:
+                payload["public_key"] = public_key_elem.text or ""
+    return payload
 
 
 def _config_json(node: ET.Element, include_details: bool = False, include_tasks: bool = False, include_preferences: bool = False) -> Dict:
@@ -1010,6 +1080,173 @@ def _command_list_named_resource(
     _json_print({key: [render(node) for node in response.direct_children(node_name)]})
 
 
+def command_credential_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
+    value_type, value = _require_lookup(args)
+    node = _lookup_direct_child(runner, "get_credentials", "credential", value_type, value, details=args.details)
+    _json_print({"credential": _credential_json(node, include_details=args.details)})
+
+
+def _prompt_password(prompt: str, default: str = "") -> str:
+    value = getpass.getpass(f"{prompt}: ")
+    if not value:
+        value = default
+    return value
+
+
+def command_credential_create(args: argparse.Namespace, runner: GvmCliRunner) -> None:
+    cred_type = args.type
+    if cred_type == "up":
+        if not args.username:
+            raise OpenvasCliError("credential create --type up requires --username")
+        if not args.password:
+            args.password = _prompt_password("Password")
+        if not args.password:
+            raise OpenvasCliError("password is required")
+        request = ET.Element("create_credential")
+        ET.SubElement(request, "name").text = args.name
+        ET.SubElement(request, "type").text = "up"
+        ET.SubElement(request, "login").text = args.username
+        ET.SubElement(request, "password").text = args.password
+        if args.comment:
+            ET.SubElement(request, "comment").text = args.comment
+
+    elif cred_type == "usk":
+        if not args.username:
+            raise OpenvasCliError("credential create --type usk requires --username")
+        if not args.private_key:
+            raise OpenvasCliError("credential create --type usk requires --private-key")
+        private_key_path = Path(args.private_key).expanduser()
+        if not private_key_path.exists():
+            raise OpenvasCliError(f"private key file not found: {private_key_path}")
+        private_key_content = private_key_path.read_text(encoding="utf-8")
+        passphrase = args.password or ""
+        if not passphrase and args.passphrase:
+            passphrase = args.passphrase
+        if not passphrase and args.private_key:
+            passphrase = _prompt_password("SSH key passphrase (or press Enter if none)")
+        request = ET.Element("create_credential")
+        ET.SubElement(request, "name").text = args.name
+        ET.SubElement(request, "type").text = "usk"
+        ET.SubElement(request, "login").text = args.username
+        key_elem = ET.SubElement(request, "key")
+        if passphrase:
+            ET.SubElement(key_elem, "phrase").text = passphrase
+        ET.SubElement(key_elem, "private").text = private_key_content
+        if args.comment:
+            ET.SubElement(request, "comment").text = args.comment
+
+    elif cred_type == "snmp":
+        has_community = args.community and args.community.strip()
+        has_v3 = args.snmp_username and args.snmp_auth_password
+        if not has_community and not has_v3:
+            raise OpenvasCliError("credential create --type snmp requires --community (v1/v2) or --snmp-username and --snmp-auth-password (v3)")
+        request = ET.Element("create_credential")
+        ET.SubElement(request, "name").text = args.name
+        ET.SubElement(request, "type").text = "snmp"
+        if has_community:
+            ET.SubElement(request, "community").text = args.community
+        if has_v3:
+            ET.SubElement(request, "login").text = args.snmp_username
+            auth_pwd = args.snmp_auth_password or _prompt_password("SNMP auth password")
+            if auth_pwd:
+                ET.SubElement(request, "password").text = auth_pwd
+            if args.snmp_auth_protocol:
+                ET.SubElement(request, "auth_algorithm").text = args.snmp_auth_protocol
+            if args.snmp_priv_password:
+                privacy_elem = ET.SubElement(request, "privacy")
+                alg = args.snmp_priv_protocol if args.snmp_priv_protocol and args.snmp_priv_protocol != "none" else "aes"
+                ET.SubElement(privacy_elem, "algorithm").text = alg
+                ET.SubElement(privacy_elem, "password").text = args.snmp_priv_password
+        if args.comment:
+            ET.SubElement(request, "comment").text = args.comment
+
+    else:
+        raise OpenvasCliError(f"unsupported credential type: {cred_type}")
+
+    response = runner.invoke_xml(request)
+    _json_print({
+        "id": response.root.attrib.get("id", ""),
+        "status": response.status,
+        "status_text": response.status_text,
+    })
+
+
+def command_credential_update(args: argparse.Namespace, runner: GvmCliRunner) -> None:
+    value_type, value = _require_lookup(args)
+    node = _lookup_direct_child(runner, "get_credentials", "credential", value_type, value, details=True)
+    credential_id = node.attrib.get("id", "")
+    cred_type = node.findtext("type", default="")
+
+    request = ET.Element("modify_credential", credential_id=credential_id)
+    if args.set_name:
+        ET.SubElement(request, "name").text = args.set_name
+    if args.comment is not None:
+        ET.SubElement(request, "comment").text = args.comment or ""
+
+    if cred_type == "up":
+        if args.username:
+            ET.SubElement(request, "login").text = args.username
+        if args.password:
+            ET.SubElement(request, "password").text = args.password
+
+    elif cred_type == "usk":
+        if args.username:
+            ET.SubElement(request, "login").text = args.username
+        if args.private_key:
+            private_key_path = Path(args.private_key).expanduser()
+            if not private_key_path.exists():
+                raise OpenvasCliError(f"private key file not found: {private_key_path}")
+            private_key_content = private_key_path.read_text(encoding="utf-8")
+            key_elem = ET.SubElement(request, "key")
+            passphrase = args.password or args.passphrase or ""
+            if passphrase:
+                ET.SubElement(key_elem, "phrase").text = passphrase
+            ET.SubElement(key_elem, "private").text = private_key_content
+
+    elif cred_type == "snmp":
+        if args.community:
+            ET.SubElement(request, "community").text = args.community
+        if args.snmp_username:
+            ET.SubElement(request, "login").text = args.snmp_username
+        if args.snmp_auth_password:
+            ET.SubElement(request, "password").text = args.snmp_auth_password
+        if args.snmp_auth_protocol:
+            ET.SubElement(request, "auth_algorithm").text = args.snmp_auth_protocol
+        if args.snmp_priv_password:
+            privacy_elem = ET.SubElement(request, "privacy")
+            alg = args.snmp_priv_protocol if args.snmp_priv_protocol and args.snmp_priv_protocol != "none" else "aes"
+            ET.SubElement(privacy_elem, "algorithm").text = alg
+            ET.SubElement(privacy_elem, "password").text = args.snmp_priv_password
+
+    if len(request) <= 1:
+        raise OpenvasCliError("credential update requires at least one field to update")
+
+    response = runner.invoke_xml(request)
+    _json_print({
+        "id": credential_id,
+        "status": response.status,
+        "status_text": response.status_text,
+    })
+
+
+def command_credential_delete(args: argparse.Namespace, runner: GvmCliRunner) -> None:
+    value_type, value = _require_lookup(args)
+    node = _lookup_direct_child(runner, "get_credentials", "credential", value_type, value, details=True)
+    credential_id = node.attrib.get("id", "")
+    in_use = _text_to_bool(node.findtext("in_use", default=""))
+
+    if in_use and not args.force:
+        raise OpenvasCliError(f"credential is in use by targets. Remove from targets or use --force to delete anyway")
+
+    request = ET.Element("delete_credential", credential_id=credential_id)
+    response = runner.invoke_xml(request)
+    _json_print({
+        "id": credential_id,
+        "status": response.status,
+        "status_text": response.status_text,
+    })
+
+
 def command_scan_create(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     target_name = args.target_name or f"Target {args.hosts}"
     task_name = args.task_name or f"Scan {args.hosts}"
@@ -1217,6 +1454,18 @@ def dispatch(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         return
     if args.resource == "credential" and args.action == "list":
         _command_list_named_resource(runner, "get_credentials", "credential", args.filter)
+        return
+    if args.resource == "credential" and args.action == "get":
+        command_credential_get(args, runner)
+        return
+    if args.resource == "credential" and args.action == "create":
+        command_credential_create(args, runner)
+        return
+    if args.resource == "credential" and args.action == "update":
+        command_credential_update(args, runner)
+        return
+    if args.resource == "credential" and args.action == "delete":
+        command_credential_delete(args, runner)
         return
     if args.resource == "report-format" and args.action == "list":
         _command_list_named_resource(runner, "get_report_formats", "report_format", args.filter)

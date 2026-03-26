@@ -105,7 +105,7 @@ openvas-cli scan create --hosts 192.168.11.10-254 --credential WindowsServer --s
 - `openvas-cli config list`
 - `openvas-cli config get`
 - `openvas-cli scanner list`
-- `openvas-cli credential list`
+- `openvas-cli credential list|get|create|update|delete`
 - `openvas-cli report-format list`
 - `openvas-cli scan create`
 
@@ -164,3 +164,69 @@ For new targets, GMP 22.7 needs either `--port-list` or `--port-range`.
 ### Scan Reporting and Exports
 
 `report get --format pdf` requires `--output` because the PDF is returned as base64 inside XML.
+
+### Credential Management
+
+Manage scan credentials for authenticated scans (SSH, Windows, SNMP).
+
+#### Credential Types
+
+| Type | Code | Description |
+|------|------|-------------|
+| Username + Password | `up` | For Windows/SMB authentication |
+| Username + SSH Key | `usk` | For Linux/Unix SSH authentication |
+| SNMP | `snmp` | For network devices (v1/v2 community or v3) |
+
+#### Create Credentials
+
+```bash
+# Username + Password (prompts for password)
+openvas-cli credential create --name "Windows Admin" --type up --username administrator
+
+# SSH Key (prompts for passphrase if needed)
+openvas-cli credential create --name "Linux Root" --type usk --username root --private-key ~/.ssh/id_rsa
+
+# SNMP v1/v2 (community)
+openvas-cli credential create --name "Router SNMP" --type snmp --community public
+
+# SNMP v3 with auth and privacy
+openvas-cli credential create --name "SNMP v3" --type snmp \
+  --snmp-username user --snmp-auth-password authpass \
+  --snmp-auth-protocol sha1 --snmp-priv-password privpass \
+  --snmp-priv-protocol aes
+```
+
+#### Get Credential Details
+
+```bash
+# List credentials
+openvas-cli credential list
+
+# Get credential by name
+openvas-cli credential get --name "Windows Admin"
+
+# Get credential details (excludes secrets)
+openvas-cli credential get --name "Windows Admin" --details
+```
+
+#### Update Credentials
+
+```bash
+# Update username
+openvas-cli credential update --name "Windows Admin" --username newadmin
+
+# Update password (prompts)
+openvas-cli credential update --name "Windows Admin" --password
+```
+
+#### Delete Credentials
+
+```bash
+# Delete (fails if in use by targets)
+openvas-cli credential delete --name "Windows Admin"
+
+# Force delete (even if in use)
+openvas-cli credential delete --name "Windows Admin" --force
+```
+
+**Note:** Credentials in use cannot be deleted. Remove them from targets first using `target update`.
