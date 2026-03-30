@@ -5,6 +5,7 @@ import getpass
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -99,6 +100,50 @@ class GvmCliRunner:
     def env_value(self, key: str) -> str:
         return self.env.get(key, "")
 
+    def _build_ssh_command(self, element: ET.Element, require_auth: bool = True) -> List[str]:
+        host = self.args.hostname or self.env_value("OPENVAS_HOST")
+        if not host:
+            raise OpenvasCliError("SSH transport requires host, use onboard, env file, or --hostname")
+
+        port = self.args.port or self.env_value("OPENVAS_PORT") or "22"
+        ssh_username = self.args.ssh_username or self.env_value("OPENVAS_SSH_USERNAME")
+        ssh_password = self.args.ssh_password or self.env_value("OPENVAS_SSH_PASSWORD")
+        gmp_username = self.args.gmp_username or self.env_value("OPENVAS_GMP_USERNAME")
+        gmp_password = self.args.gmp_password or self.env_value("OPENVAS_GMP_PASSWORD")
+        socket_path = self.args.socketpath or self.env_value("OPENVAS_SOCKET_PATH") or DEFAULT_SOCKET_PATH
+        remote_gvm_cli_bin = self.env_value("OPENVAS_REMOTE_GVM_CLI_BIN") or "gvm-cli"
+
+        if require_auth and not self.args.config and not gmp_username:
+            raise OpenvasCliError("missing GMP credentials, use onboard, env file, --gmp-username/--gmp-password, or --config")
+        if self.args.config:
+            raise OpenvasCliError("SSH transport wrapper mode does not support --config; use env file or explicit options")
+
+        remote_command = [
+            remote_gvm_cli_bin,
+            "socket",
+            "--socketpath",
+            socket_path,
+        ]
+        if gmp_username:
+            remote_command.extend(["--gmp-username", gmp_username])
+        if gmp_password:
+            remote_command.extend(["--gmp-password", gmp_password])
+        remote_command.extend(["--xml", ET.tostring(element, encoding="unicode")])
+        remote_command_text = " ".join(shlex.quote(part) for part in remote_command)
+
+        ssh_command: List[str] = ["ssh", "-T", "-p", str(port)]
+        if self.args.auto_accept_host:
+            ssh_command.extend(["-o", "StrictHostKeyChecking=accept-new"])
+        target = f"{ssh_username}@{host}" if ssh_username else str(host)
+        ssh_command.extend([target, remote_command_text])
+
+        if ssh_password:
+            if shutil.which("sshpass") is None:
+                raise OpenvasCliError("SSH password auth in wrapper mode requires sshpass or SSH key-based authentication")
+            ssh_command = ["sshpass", "-p", ssh_password] + ssh_command
+
+        return ssh_command
+
     def effective_transport(self) -> str:
         return self.args.transport or self.env_value("OPENVAS_TRANSPORT") or "ssh"
 
@@ -180,9 +225,13 @@ class GvmCliRunner:
         raise OpenvasCliError(f"unsupported transport: {transport}")
 
     def invoke_xml(self, element: ET.Element, require_auth: bool = True) -> GvmResponse:
-        command = self.build_base_command(require_auth=require_auth)
-        xml_text = ET.tostring(element, encoding="unicode")
-        command.extend(["--xml", xml_text])
+        transport = self.effective_transport()
+        if transport == "ssh":
+            command = self._build_ssh_command(element, require_auth=require_auth)
+        else:
+            command = self.build_base_command(require_auth=require_auth)
+            xml_text = ET.tostring(element, encoding="unicode")
+            command.extend(["--xml", xml_text])
 
         if self.args.debug:
             gmp_password = self.args.gmp_password or self.env_value("OPENVAS_GMP_PASSWORD")
@@ -246,6 +295,7 @@ class OnboardWriter:
             "OPENVAS_SOCKET_PATH",
             "OPENVAS_SSH_USERNAME",
             "OPENVAS_SSH_PASSWORD",
+            "OPENVAS_REMOTE_GVM_CLI_BIN",
             "OPENVAS_GMP_USERNAME",
             "OPENVAS_GMP_PASSWORD",
             "OPENVAS_TLS_CERTFILE",
@@ -277,6 +327,41 @@ class OnboardWriter:
         output = (completed.stdout or completed.stderr or "").rstrip()
         if output:
             print(output)
+
+    def add_ssh_host_to_known_hosts(self, host: str, port: str) -> None:
+        if shutil.which("ssh-keyscan") is None:
+            print("ssh-keyscan not found, skipping known_hosts update.")
+            return
+        ssh_dir = Path.home() / ".ssh"
+        ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(ssh_dir, 0o700)
+        known_hosts = ssh_dir / "known_hosts"
+        host_key_name = host if str(port) == "22" else f"[{host}]:{port}"
+        check = subprocess.run(["ssh-keygen", "-F", host_key_name], capture_output=True, text=True)
+        if check.returncode == 0 and check.stdout.strip():
+            print(f"SSH host already present in known_hosts: {host_key_name}")
+            return
+        scan = subprocess.run(["ssh-keyscan", "-H", "-p", str(port), host], capture_output=True, text=True)
+        if scan.returncode != 0 or not scan.stdout.strip():
+            print(f"Failed to fetch SSH host key for {host_key_name}. Add it manually if needed.")
+            return
+        with known_hosts.open("a", encoding="utf-8") as handle:
+            handle.write(scan.stdout)
+        if known_hosts.exists():
+            os.chmod(known_hosts, 0o600)
+        print(f"Added SSH host key to {known_hosts}: {host_key_name}")
+
+    def prompt_bool(self, label: str, default: bool = False) -> bool:
+        suffix = " [Y/n]" if default else " [y/N]"
+        while True:
+            value = input(f"{label}{suffix}: ").strip().lower()
+            if not value:
+                return default
+            if value in {"y", "yes"}:
+                return True
+            if value in {"n", "no"}:
+                return False
+            print("Enter y or n.")
 
     def detect_socket_paths(self) -> List[str]:
         found: List[str] = []
@@ -328,6 +413,9 @@ class OnboardWriter:
         if transport == "ssh":
             values["OPENVAS_SSH_USERNAME"] = self.prompt("SSH username", default=self.current.get("OPENVAS_SSH_USERNAME", "gmp"), required=True)
             values["OPENVAS_SSH_PASSWORD"] = self.prompt_secret("SSH password", default=self.current.get("OPENVAS_SSH_PASSWORD", ""), required=False)
+            values["OPENVAS_REMOTE_GVM_CLI_BIN"] = self.prompt("Remote gvm-cli path", default=self.current.get("OPENVAS_REMOTE_GVM_CLI_BIN", "gvm-cli"), required=True)
+            if self.prompt_bool("Accept remote OpenVAS SSH host into known_hosts now", default=False):
+                self.add_ssh_host_to_known_hosts(values["OPENVAS_HOST"], values["OPENVAS_PORT"])
 
         if transport == "tls":
             values["OPENVAS_TLS_CERTFILE"] = self.prompt("TLS certfile", default=self.current.get("OPENVAS_TLS_CERTFILE", ""), required=False)
