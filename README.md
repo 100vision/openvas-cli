@@ -15,8 +15,8 @@ If missing, install these dependency packages for Ubuntu or Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv
-python3 -m install gvm-tools
+sudo apt-get install -y python3 python3-venv python3-pipx sshpass
+python3 -m pipx install gvm-tools
 ```
 
 Quick checks:
@@ -56,30 +56,49 @@ OPENVAS_CLI_INSTALL_DIR="$HOME/bin" bash ./openvas-cli/install.sh install
 
 ## Onboarding
 
-Upon installation, run：
+Upon installation, run:
 
 ```bash
-openvas-cli onboard` 
+openvas-cli onboard
 ```
 
-this is to start first time setup process and take essential information:
+This starts first-time setup and saves the collected values to:
 
-**Supported Connection Options**
-- `SSH`
-- `SOCKET`
-- `TLS`
+```bash
+~/.config/openvas-cli/openvas-cli.conf
+```
 
+The file is written with permission `600` on Linux native filesystems.
 
+### Supported connection options
 
-**Credentials**
+- `ssh`
+- `socket`
+- `tls`
 
-- OpenVAS Login Credential
-- Connection credentials
+### SSH onboarding behavior
 
-**OpenVAS Server Address**
-- FQDN or IP address
+For `ssh` transport, onboarding now bootstraps key-based access for the user automatically:
 
->  setup information will be saved a local config file `~/.config/openvas-cli/openvas-cli.conf`The file is protected with permission `600` on Linux native filesystems.
+1. asks for remote host, port, SSH username, and SSH password
+2. generates a local SSH keypair if one does not already exist
+3. adds the remote OpenVAS host to `~/.ssh/known_hosts`
+4. installs the generated public key into the remote user's `authorized_keys`
+5. saves the generated identity path in the local config file
+
+After onboarding, users can run `openvas-cli doctor`, `openvas-cli task list`, and other subcommands without explicitly passing an identity file or doing extra SSH setup.
+
+Default generated SSH key path:
+
+```bash
+~/.ssh/openvas_cli_ed25519
+```
+
+Note:
+
+- local `sshpass` is required only during onboarding when installing the generated public key
+- normal runtime commands use SSH key authentication and do not require `sshpass`
+- remote `gvm-cli` must be available on the OpenVAS host
 
 ## Quick Start
 
@@ -160,6 +179,36 @@ filtered output be like:
 ### Access to a running GreenBone Openvas instance 
 
 SSH is the default transport if `--transport` and `OPENVAS_TRANSPORT` are not set.
+
+For Greenbone Community Edition, `openvas-cli` uses plain SSH to run a remote `gvm-cli socket` command instead of relying on `gvm-cli ssh`. This avoids the Community Edition limitation where direct `gvm-cli ssh` support is typically not available out of the box.
+
+The SSH wrapper uses the configured remote socket path, typically:
+
+```bash
+/run/gvmd/gvmd.sock
+```
+
+Relevant SSH config values saved by onboarding:
+
+```bash
+OPENVAS_TRANSPORT="ssh"
+OPENVAS_HOST="openvas.example.com"
+OPENVAS_PORT="22"
+OPENVAS_SSH_USERNAME="tlin"
+OPENVAS_SSH_IDENTITY_FILE="/home/tlin/.ssh/openvas_cli_ed25519"
+OPENVAS_REMOTE_GVM_CLI_BIN="gvm-cli"
+OPENVAS_SOCKET_PATH="/run/gvmd/gvmd.sock"
+OPENVAS_GMP_USERNAME="admin"
+OPENVAS_GMP_PASSWORD="..."
+```
+
+With those values in place, normal commands stay unchanged:
+
+```bash
+openvas-cli doctor
+openvas-cli system version
+openvas-cli task list
+```
 
 ### Scan Tasks
 
