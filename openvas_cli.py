@@ -107,40 +107,41 @@ class GvmCliRunner:
 
         port = self.args.port or self.env_value("OPENVAS_PORT") or "22"
         ssh_username = self.args.ssh_username or self.env_value("OPENVAS_SSH_USERNAME")
-        ssh_password = self.args.ssh_password or self.env_value("OPENVAS_SSH_PASSWORD")
+        ssh_identity_file = self.args.ssh_identity_file or self.env_value("OPENVAS_SSH_IDENTITY_FILE")
         gmp_username = self.args.gmp_username or self.env_value("OPENVAS_GMP_USERNAME")
         gmp_password = self.args.gmp_password or self.env_value("OPENVAS_GMP_PASSWORD")
         socket_path = self.args.socketpath or self.env_value("OPENVAS_SOCKET_PATH") or DEFAULT_SOCKET_PATH
         remote_gvm_cli_bin = self.env_value("OPENVAS_REMOTE_GVM_CLI_BIN") or "gvm-cli"
+        if not ssh_username:
+            raise OpenvasCliError("SSH wrapper mode requires --ssh-username or OPENVAS_SSH_USERNAME")
 
         if require_auth and not self.args.config and not gmp_username:
             raise OpenvasCliError("missing GMP credentials, use onboard, env file, --gmp-username/--gmp-password, or --config")
         if self.args.config:
             raise OpenvasCliError("SSH transport wrapper mode does not support --config; use env file or explicit options")
+        if ssh_identity_file and not Path(ssh_identity_file).expanduser().exists():
+            raise OpenvasCliError(f"SSH identity file not found: {ssh_identity_file}")
 
-        remote_command = [
-            remote_gvm_cli_bin,
-            "socket",
-            "--socketpath",
-            socket_path,
-        ]
+        remote_command = [remote_gvm_cli_bin]
         if gmp_username:
             remote_command.extend(["--gmp-username", gmp_username])
         if gmp_password:
             remote_command.extend(["--gmp-password", gmp_password])
+        remote_command.extend([
+            "socket",
+            "--socketpath",
+            socket_path,
+        ])
         remote_command.extend(["--xml", ET.tostring(element, encoding="unicode")])
         remote_command_text = " ".join(shlex.quote(part) for part in remote_command)
 
         ssh_command: List[str] = ["ssh", "-T", "-p", str(port)]
         if self.args.auto_accept_host:
             ssh_command.extend(["-o", "StrictHostKeyChecking=accept-new"])
+        if ssh_identity_file:
+            ssh_command.extend(["-i", ssh_identity_file])
         target = f"{ssh_username}@{host}" if ssh_username else str(host)
         ssh_command.extend([target, remote_command_text])
-
-        if ssh_password:
-            if shutil.which("sshpass") is None:
-                raise OpenvasCliError("SSH password auth in wrapper mode requires sshpass or SSH key-based authentication")
-            ssh_command = ["sshpass", "-p", ssh_password] + ssh_command
 
         return ssh_command
 
@@ -213,11 +214,8 @@ class GvmCliRunner:
             port = self.args.port or self.env_value("OPENVAS_PORT") or "22"
             command.extend(["--hostname", host, "--port", str(port)])
             ssh_username = self.args.ssh_username or self.env_value("OPENVAS_SSH_USERNAME")
-            ssh_password = self.args.ssh_password or self.env_value("OPENVAS_SSH_PASSWORD")
             if ssh_username:
                 command.extend(["--ssh-username", ssh_username])
-            if ssh_password:
-                command.extend(["--ssh-password", ssh_password])
             if self.args.auto_accept_host:
                 command.append("--auto-accept-host")
             return command
@@ -235,14 +233,11 @@ class GvmCliRunner:
 
         if self.args.debug:
             gmp_password = self.args.gmp_password or self.env_value("OPENVAS_GMP_PASSWORD")
-            ssh_password = self.args.ssh_password or self.env_value("OPENVAS_SSH_PASSWORD")
             masked = []
             for part in command:
                 value = part
                 if gmp_password:
                     value = value.replace(gmp_password, "***")
-                if ssh_password:
-                    value = value.replace(ssh_password, "***")
                 masked.append(value)
             print(" ".join(masked), file=sys.stderr)
 
@@ -294,7 +289,7 @@ class OnboardWriter:
             "OPENVAS_PORT",
             "OPENVAS_SOCKET_PATH",
             "OPENVAS_SSH_USERNAME",
-            "OPENVAS_SSH_PASSWORD",
+            "OPENVAS_SSH_IDENTITY_FILE",
             "OPENVAS_REMOTE_GVM_CLI_BIN",
             "OPENVAS_GMP_USERNAME",
             "OPENVAS_GMP_PASSWORD",
@@ -351,17 +346,58 @@ class OnboardWriter:
             os.chmod(known_hosts, 0o600)
         print(f"Added SSH host key to {known_hosts}: {host_key_name}")
 
-    def prompt_bool(self, label: str, default: bool = False) -> bool:
-        suffix = " [Y/n]" if default else " [y/N]"
-        while True:
-            value = input(f"{label}{suffix}: ").strip().lower()
-            if not value:
-                return default
-            if value in {"y", "yes"}:
-                return True
-            if value in {"n", "no"}:
-                return False
-            print("Enter y or n.")
+    def ensure_ssh_keypair(self, identity_path: str) -> Path:
+        target = Path(identity_path).expanduser()
+        ssh_dir = target.parent
+        ssh_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(ssh_dir, 0o700)
+        pub_path = Path(str(target) + ".pub")
+        if target.exists() and pub_path.exists():
+            return target
+        if shutil.which("ssh-keygen") is None:
+            raise OpenvasCliError("ssh-keygen not found; unable to generate SSH identity")
+        completed = subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", str(target), "-N", "", "-C", "openvas-cli"],
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise OpenvasCliError((completed.stderr or completed.stdout or "ssh-keygen failed").strip())
+        return target
+
+    def install_ssh_public_key(self, host: str, port: str, ssh_username: str, ssh_password: str, identity_path: Path) -> None:
+        pub_path = Path(str(identity_path) + ".pub")
+        if not pub_path.exists():
+            raise OpenvasCliError(f"SSH public key not found: {pub_path}")
+        if not ssh_password:
+            raise OpenvasCliError("SSH password required during onboarding to install the generated SSH public key")
+        if shutil.which("sshpass") is None:
+            raise OpenvasCliError("sshpass is required during onboarding to install the generated SSH public key")
+
+        public_key = pub_path.read_text(encoding="utf-8").strip()
+        remote_script = (
+            "umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; "
+            "grep -qxF {key} ~/.ssh/authorized_keys || printf '%s\\n' {key} >> ~/.ssh/authorized_keys"
+        ).format(key=shlex.quote(public_key))
+
+        command = [
+            "sshpass", "-p", ssh_password,
+            "ssh", "-T", "-p", str(port),
+            "-o", "StrictHostKeyChecking=accept-new",
+            f"{ssh_username}@{host}",
+            remote_script,
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise OpenvasCliError((completed.stderr or completed.stdout or "failed to install SSH public key").strip())
+
+    def bootstrap_ssh_identity(self, host: str, port: str, ssh_username: str, identity_path: str) -> str:
+        identity = self.ensure_ssh_keypair(identity_path)
+        self.add_ssh_host_to_known_hosts(host, port)
+        password = self.prompt_secret("SSH password (used once to install generated public key)", required=True)
+        self.install_ssh_public_key(host, port, ssh_username, password, identity)
+        print(f"SSH key installed for {ssh_username}@{host}. Future commands will use {identity}.")
+        return str(identity)
 
     def detect_socket_paths(self) -> List[str]:
         found: List[str] = []
@@ -412,10 +448,14 @@ class OnboardWriter:
 
         if transport == "ssh":
             values["OPENVAS_SSH_USERNAME"] = self.prompt("SSH username", default=self.current.get("OPENVAS_SSH_USERNAME", "gmp"), required=True)
-            values["OPENVAS_SSH_PASSWORD"] = self.prompt_secret("SSH password", default=self.current.get("OPENVAS_SSH_PASSWORD", ""), required=False)
+            default_identity = self.current.get("OPENVAS_SSH_IDENTITY_FILE", str(Path.home() / ".ssh" / "openvas_cli_ed25519"))
+            values["OPENVAS_SSH_IDENTITY_FILE"] = self.bootstrap_ssh_identity(
+                values["OPENVAS_HOST"],
+                values["OPENVAS_PORT"],
+                values["OPENVAS_SSH_USERNAME"],
+                default_identity,
+            )
             values["OPENVAS_REMOTE_GVM_CLI_BIN"] = self.prompt("Remote gvm-cli path", default=self.current.get("OPENVAS_REMOTE_GVM_CLI_BIN", "gvm-cli"), required=True)
-            if self.prompt_bool("Accept remote OpenVAS SSH host into known_hosts now", default=False):
-                self.add_ssh_host_to_known_hosts(values["OPENVAS_HOST"], values["OPENVAS_PORT"])
 
         if transport == "tls":
             values["OPENVAS_TLS_CERTFILE"] = self.prompt("TLS certfile", default=self.current.get("OPENVAS_TLS_CERTFILE", ""), required=False)
@@ -640,7 +680,7 @@ def _add_global_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hostname")
     parser.add_argument("--port", type=int)
     parser.add_argument("--ssh-username")
-    parser.add_argument("--ssh-password")
+    parser.add_argument("--ssh-identity-file")
     parser.add_argument("--auto-accept-host", action="store_true")
     parser.add_argument("--certfile")
     parser.add_argument("--keyfile")
