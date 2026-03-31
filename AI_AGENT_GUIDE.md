@@ -19,19 +19,13 @@ local openvas-cli
 
 ## Prerequisites
 
+Before getting started, maek sure:
+
 - a live running OpenVAS Community Edtion instance.
-- a ssh user account (member of `_gmv` on OpenVAS instance)
+- a ssh user account (member of `_gvm` on OpenVAS instance)
+- Debian or other Linux distributions where you run 'openvas-cli`.
  
 ## 1. Installation
-
-
-
-Required:
-
--  `Debian 11+` or `Ubuntu 22.04+` or other Linux distributions where `openvas-cli` is installed.
-- `python3.9+`
-- `gvm-cli`
-
 
 
 - Install dependency packages if missing:
