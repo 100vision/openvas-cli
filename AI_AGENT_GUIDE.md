@@ -2,7 +2,7 @@
 
 This document is for AI agents that need to install, configure, and use `openvas-cli` safely and predictably.
 
-`openvas-cli` is a python wrapper of `gvm-cli` from GreenBone project and designed to remotely manage/operate a remote `OpenVAS Community Edtion` which doesn't ship a SSH remote administrative capabilities.
+`openvas-cli` is a python wrapper for `gvm-cli`  and designed to provide SSH remote administrative capabilities for GreenBone Community Edition.
 
 
 ## How it works
@@ -28,7 +28,7 @@ local openvas-cli
 
 Required:
 
--  `Debian 11+` or `Ubuntu 22.04+` or other Linux distributions.
+-  `Debian 11+` or `Ubuntu 22.04+` or other Linux distributions where `openvas-cli` is installed.
 - `python3.9+`
 - `gvm-cli`
 
