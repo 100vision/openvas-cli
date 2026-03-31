@@ -20,10 +20,12 @@ Before getting started, make sure you have:
 
 - a live running OpenVAS Community Edtion instance.
 - a ssh user account (member of `_gvm` on OpenVAS instance)
-- a Debian machine as remote workstastion or other Linux distributions where you run 'openvas-cli`.
+- a Debian machine as remote workstastion or other Linux distributions where you run 'openvas-cli`. 
  
 ## 1. Installation
 
+>Notes to `AI Agent`:
+if you're an AI Agent, please be mindful that `openvas-cli` should be installed on the same machine where you are.
 
 - Install dependency packages if missing on the administrative workstation
 
