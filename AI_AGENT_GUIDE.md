@@ -6,7 +6,6 @@ This document is for AI agents that need to install, configure, and use `openvas
 
 Use `openvas-cli` to operate or manage a live OpenVAS / Greenbone instance either:
 
-- locally via Unix socket
 - remotely via SSH
 - remotely via TLS
 
@@ -14,28 +13,29 @@ For Greenbone Community Edition, prefer the built-in SSH wrapper mode provided b
 
 ---
 
+## Prerequisites
+
+- a live running OpenVAS Community Edtion instance.
+- a ssh user account (member of `_gmv` on OpenVAS instance)
+ 
 ## 1. Installation
 
-### Prerequisites
+
 
 Required:
 
-- `python3`
+-  Debian 11+ or Ubuntu 22.04+
+- `python3.9+`
 - `gvm-cli`
 
-Helpful local tools:
 
-- `ssh`
-- `ssh-keygen`
-- `ssh-keyscan`
-- `sshpass` *(required only during SSH onboarding bootstrap)*
 
 Install dependencies on Ubuntu / Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv ssh sshpass
-python3 -m pip install gvm-tools
+sudo apt-get install -y python3 python3-pipx python3-venv ssh sshpass
+python3 -m pipx install gvm-tools
 ```
 
 Install `openvas-cli`:
@@ -84,7 +84,6 @@ Default transport is `ssh` if nothing else is set.
 
 ### Recommended choice
 
-- use `socket` when the CLI runs on the same host as `gvmd`
 - use `ssh` for Greenbone Community Edition remote access
 - use `tls` only when GMP over TLS is explicitly configured on the server
 
@@ -124,7 +123,6 @@ local openvas-cli
   -> remote gvmd socket
 ```
 
-It does **not** depend on `gvm-cli ssh` working on the remote CE host.
 
 ### Remote requirements for SSH mode
 
