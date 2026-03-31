@@ -24,13 +24,13 @@ For Greenbone Community Edition, prefer the built-in SSH wrapper mode provided b
 
 Required:
 
--  `Debian 11+` or `Ubuntu 22.04+`
+-  `Debian 11+` or `Ubuntu 22.04+` or other Linux distributions.
 - `python3.9+`
 - `gvm-cli`
 
 
 
-Install dependencies on Ubuntu / Debian:
+- Install dependency packages if missing:
 
 ```bash
 sudo apt-get update
@@ -38,7 +38,7 @@ sudo apt-get install -y python3 python3-pipx python3-venv ssh sshpass
 python3 -m pipx install gvm-tools
 ```
 
-Install `openvas-cli`:
+- Install `openvas-cli`:
 
 ```bash
 git clone https://github.com/100vision/openvas-cli.git
@@ -47,7 +47,7 @@ chmod +x ./install.sh
 ./install.sh install
 ```
 
-Check install state:
+- Check install state:
 
 ```bash
 bash ./install.sh status
@@ -94,11 +94,10 @@ Default transport is `ssh` if nothing else is set.
 
 ## 4. SSH onboarding behavior
 
-For `ssh` transport, onboarding is designed to minimize future user interaction.
 
 ### What onboarding does in SSH mode
 
-1. asks for remote host, port, and SSH username
+1. asks for remote OpenVAS host, port, and SSH username
 2. generates a local SSH keypair if missing
 3. adds the remote host to `~/.ssh/known_hosts`
 4. prompts once for the SSH password
@@ -127,29 +126,21 @@ local openvas-cli
 ```
 
 
-### Remote requirements for SSH mode
+### Remote requirements for SSH Transport option
 
 The remote OpenVAS instance host must have:
 
 - reachable SSH service
 - `gvm-cli` available in `PATH`, or a configured explicit path
-- access to the `gvmd` Unix socket
+- access to the `gvmd` Unix socket. default path: `/run/gvmd/gvmd.sock`
 
-Typical socket path:
-
-```bash
-/run/gvmd/gvmd.sock
-```
 
 ---
 
 ## 5. Config values agents should know
 
-Common config file:
+Common openvas-cli configuration file is saved and can be located at `~/.config/openvas-cli/openvas-cli.conf`
 
-```bash
-~/.config/openvas-cli/openvas-cli.conf
-```
 
 Typical SSH config:
 
@@ -157,7 +148,7 @@ Typical SSH config:
 OPENVAS_TRANSPORT="ssh"
 OPENVAS_HOST="openvas.example.com"
 OPENVAS_PORT="22"
-OPENVAS_SSH_USERNAME="scanner"
+OPENVAS_SSH_USERNAME="ssh-user-name"
 OPENVAS_SSH_IDENTITY_FILE="/home/user/.ssh/openvas_cli_ed25519"
 OPENVAS_REMOTE_GVM_CLI_BIN="gvm-cli"
 OPENVAS_SOCKET_PATH="/run/gvmd/gvmd.sock"
@@ -165,14 +156,6 @@ OPENVAS_GMP_USERNAME="admin"
 OPENVAS_GMP_PASSWORD="..."
 ```
 
-Typical local socket config:
-
-```bash
-OPENVAS_TRANSPORT="socket"
-OPENVAS_SOCKET_PATH="/run/gvmd/gvmd.sock"
-OPENVAS_GMP_USERNAME="admin"
-OPENVAS_GMP_PASSWORD="..."
-```
 
 ---
 
@@ -238,7 +221,7 @@ openvas-cli report get --id REPORT_ID --format pdf --output report.pdf
 
 ---
 
-## 8. Credential management
+## 8. Scanning Credential management
 
 Supported initial credential types:
 
@@ -266,14 +249,14 @@ openvas-cli credential delete --name "Windows Admin"
 
 ## 9. Troubleshooting rules for AI agents
 
-### If `doctor` fails in SSH mode
+### If `doctor` fails
 
 Check in this order:
 
 1. remote SSH login works
 2. remote `gvm-cli` exists
 3. remote socket path is correct
-4. remote user can access the socket
+4. remote user can access the socket 
 5. GMP credentials are correct
 
 Useful checks:
@@ -293,17 +276,6 @@ Prefer:
 - `openvas-cli` SSH wrapper mode
 - or direct remote socket execution over plain SSH
 
-### If TLS fails
-
-Typical causes:
-
-- wrong port
-- wrong CA file
-- self-signed cert not trusted by client
-
-### If credential deletion fails
-
-The credential is likely still in use by one or more targets.
 
 ---
 
@@ -350,7 +322,7 @@ SSH onboarding bootstrap needs `sshpass` one time to install the generated publi
 
 ### Q: What if SSH login works but the public key cannot be installed remotely?
 
-Check whether the remote user can create or update:
+Check whether the remote user can create or update on remote OpenVAS instance:
 
 ```bash
 ~/.ssh/
@@ -399,14 +371,11 @@ Prefer `socket` if the CLI runs on the same host as `gvmd`. Prefer `ssh` for rem
 
 If plain SSH works but the remote socket command cannot be made to work reliably, then:
 
-- verify Unix socket access.Specifically check if ssh user is a member of `_gvm` group on remote OpenVAS instance.
-- consider `socket` if running locally on remote OpenVAS instance.
+- verify Unix socket access.Specifically check if ssh user is a member of `_gvm` group on remote OpenVAS instance by `id ssh_user_name`
+- consider `socket` if running locally on remote OpenVAS instance or ask OpenVAS adminstrator to check if OpenVAS is alive and operational.
 - consider `tls` only if GMP over TLS is actually configured
 
 
-### Q: What if TLS uses a self-signed certificate?
-
-Ensure the client trusts the issuing CA or the self-signed cert via the configured CA file. Wrong CA trust is a common reason for TLS failures.
 
 ### Q: What should an agent validate before using `scan create`?
 
@@ -437,13 +406,13 @@ openvas-cli scanner list
 
 Both:
 
-- local machine: where to generate SSH keypair, save config, update `known_hosts`
-- remote OpenVAS instance: where to install the generated public key into `authorized_keys` of ssh user's home directory.
+- local machine: where to generate SSH keypair, save openvas-cli config, update `known_hosts`
+- remote OpenVAS instance: where to install the generated public key into `authorized_keys` 
 
 ### Q: Does the guide distinguish SSH authentication from GMP authentication?
 
 Yes. SSH authentication is for reaching the remote OpenVAS instance. GMP authentication is for talking to `gvmd` after the SSH transport is established.
 
-### Q: Is onboarding safe to re-run?
+### Q: Is openvas-cli onboarding safe to re-run?
 
-Yes, but it updates local config and may reinstall or refresh SSH bootstrap state. Re-run onboarding with `--force` option to re-write when transport settings, hostnames, credentials, or remote paths change.
+Yes, but it updates local config and may reinstall or refresh SSH bootstrap state. Re-run onboarding with `--force` option to re-write the openvas-cli config when transport settings, hostnames, credentials, or remote paths change.
