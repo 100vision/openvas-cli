@@ -2,15 +2,19 @@
 
 This document is for AI agents that need to install, configure, and use `openvas-cli` safely and predictably.
 
-## Goal
+`openvas-cli` is a python wrapper of `gvm-cli` from GreenBone project and designed to remotely manage/operate a remote `OpenVAS Community Edtion` which doesn't ship a SSH remote administrative capabilities.
 
-Use `openvas-cli` to operate or manage a live OpenVAS / Greenbone instance either:
 
-- remotely via SSH
-- remotely via TLS
+## How it works
 
-For Greenbone Community Edition, prefer the built-in SSH wrapper mode provided by `openvas-cli` instead of relying on `gvm-cli ssh` directly.
+For Greenbone Community Edition, `openvas-cli` uses:
 
+```text
+local openvas-cli
+  -> local ssh
+  -> remote gvm-cli socket
+  -> remote gvmd socket
+```
 ---
 
 ## Prerequisites
@@ -114,16 +118,7 @@ Default generated key path:
 
 After onboarding succeeds, normal commands should not need explicit SSH identity arguments.
 
-### Important runtime model
 
-For Greenbone Community Edition, `openvas-cli` uses:
-
-```text
-local openvas-cli
-  -> local ssh
-  -> remote gvm-cli socket
-  -> remote gvmd socket
-```
 
 
 ### Remote requirements for SSH Transport option
