@@ -24,15 +24,16 @@ Quick checks:
 ```bash
 python3 --version
 gvm-cli --version
-bash ./openvas-cli/install.sh status
 ```
 
 ## Installation
 
-Install, simply run:
+To install, simply run:
 
 ```bash
-bash ./openvas-cli/install.sh install
+cd openvas-cli
+chmod +x ./install.sh
+./install.sh install
 ```
 
 Check install status:
@@ -62,13 +63,7 @@ Upon installation, run:
 openvas-cli onboard
 ```
 
-This starts first-time setup and saves the collected values to:
-
-```bash
-~/.config/openvas-cli/openvas-cli.conf
-```
-
-The file is written with permission `600` on Linux native filesystems.
+This starts first-time setup and saves the collected values to `~/.config/openvas-cli/openvas-cli.conf`,the file is protected with permission `600` on Linux native filesystems.
 
 ### Supported connection options
 
