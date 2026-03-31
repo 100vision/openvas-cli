@@ -335,3 +335,117 @@ If the environment is healthy, proceed with:
 - task creation / update
 - scan creation
 - report retrieval
+
+---
+
+## 12. Q&A appendix for AI agents
+
+### Q: What if `gvm-cli` exists on the remote host but not on the local host?
+
+`openvas-cli` still requires a local `gvm-cli` installation because it depends on the local toolchain and command model. Install local `gvm-cli` first, then continue.
+
+### Q: What if `sshpass` is missing during SSH onboarding?
+
+SSH onboarding bootstrap needs `sshpass` one time to install the generated public key using the provided SSH password. Install `sshpass`, then rerun onboarding.
+
+### Q: What if SSH login works but the public key cannot be installed remotely?
+
+Check whether the remote user can create or update:
+
+```bash
+~/.ssh/
+~/.ssh/authorized_keys
+```
+
+If not, fix remote home directory or permission issues first.
+
+### Q: What if the generated SSH key exists locally but remote key install never happened?
+
+Treat onboarding as incomplete. Re-run `openvas-cli onboard` and allow it to reinstall the public key, or install the public key manually on the remote host.
+
+### Q: What if the remote `gvm-cli` is not in `PATH`?
+
+Set or save the explicit remote path, for example:
+
+```bash
+OPENVAS_REMOTE_GVM_CLI_BIN="/usr/local/bin/gvm-cli"
+```
+
+### Q: What if the remote socket is not `/run/gvmd/gvmd.sock`?
+
+Use the actual socket path in config:
+
+```bash
+OPENVAS_SOCKET_PATH="/run/gvm/gvmd.sock"
+```
+
+Always verify with a remote socket test if SSH mode fails.
+
+### Q: What if `openvas-cli doctor` fails in SSH mode but the remote socket command works manually?
+
+Check these next:
+
+1. remote `gvm-cli` path mismatch
+2. wrong socket path saved in config
+3. wrong SSH identity file
+4. changed remote host key in `known_hosts`
+5. wrong GMP username or password
+
+### Q: Should an agent use `socket` or `ssh` when both are possible?
+
+Prefer `socket` if the CLI runs on the same host as `gvmd`. Prefer `ssh` for remote Greenbone Community Edition access.
+
+### Q: When should an agent stop trying SSH and switch strategy?
+
+If plain SSH works but the remote socket command cannot be made to work reliably, then:
+
+- verify remote `gvm-cli`
+- verify socket access
+- consider `socket` if running locally
+- consider `tls` only if GMP over TLS is actually configured
+
+Do not fall back to assuming `gvm-cli ssh` will work on CE.
+
+### Q: What if TLS uses a self-signed certificate?
+
+Ensure the client trusts the issuing CA or the self-signed cert via the configured CA file. Wrong CA trust is a common reason for TLS failures.
+
+### Q: What should an agent validate before using `scan create`?
+
+At minimum validate:
+
+1. transport is healthy via `openvas-cli doctor`
+2. the requested scan config exists
+3. the scanner exists
+4. the credential exists if one is referenced
+5. a valid port list or port range is provided when required
+
+### Q: What should an agent do if credential deletion fails because the credential is in use?
+
+Do not force deletion by default. First identify which targets reference the credential, remove the association, then retry deletion.
+
+### Q: What minimum checks are required before saying the environment is healthy?
+
+Use this minimum bar:
+
+```bash
+openvas-cli doctor
+openvas-cli system version
+openvas-cli config list
+openvas-cli scanner list
+```
+
+### Q: Does onboarding happen on the local machine or remote host?
+
+Both:
+
+- local machine: generate SSH keypair, save config, update `known_hosts`
+- remote host: install the generated public key into `authorized_keys`
+
+### Q: Does the guide distinguish SSH authentication from GMP authentication?
+
+Yes. SSH authentication is for reaching the remote host. GMP authentication is for talking to `gvmd` after the SSH transport is established.
+
+### Q: Is onboarding safe to re-run?
+
+Yes, but it updates local config and may reinstall or refresh SSH bootstrap state. Re-run onboarding when transport settings, hostnames, credentials, or remote paths change.
