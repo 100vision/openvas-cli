@@ -24,7 +24,7 @@ For Greenbone Community Edition, prefer the built-in SSH wrapper mode provided b
 
 Required:
 
--  Debian 11+ or Ubuntu 22.04+
+-  `Debian 11+` or `Ubuntu 22.04+`
 - `python3.9+`
 - `gvm-cli`
 
@@ -41,7 +41,10 @@ python3 -m pipx install gvm-tools
 Install `openvas-cli`:
 
 ```bash
-bash ./install.sh install
+git clone https://github.com/100vision/openvas-cli.git
+cd openvas-cli
+chmod +x ./install.sh
+./install.sh install
 ```
 
 Check install state:
