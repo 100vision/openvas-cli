@@ -4,7 +4,7 @@ This document is for AI agents that need to install, configure, and use `openvas
 
 ## Goal
 
-Use `openvas-cli` to manage a live OpenVAS / Greenbone instance either:
+Use `openvas-cli` to operate or manage a live OpenVAS / Greenbone instance either:
 
 - locally via Unix socket
 - remotely via SSH
@@ -128,7 +128,7 @@ It does **not** depend on `gvm-cli ssh` working on the remote CE host.
 
 ### Remote requirements for SSH mode
 
-The remote host must have:
+The remote OpenVAS instance host must have:
 
 - reachable SSH service
 - `gvm-cli` available in `PATH`, or a configured explicit path
@@ -310,7 +310,6 @@ The credential is likely still in use by one or more targets.
 
 - prefer `openvas-cli onboard` before any first use on a new machine
 - prefer saved config over repeatedly passing secrets on the command line
-- do not assume remote CE supports `gvm-cli ssh`
 - do not delete credentials that may still be attached to targets
 - verify with `openvas-cli doctor` after transport or credential changes
 
@@ -346,7 +345,7 @@ If the environment is healthy, proceed with:
 
 ### Q: What if `sshpass` is missing during SSH onboarding?
 
-SSH onboarding bootstrap needs `sshpass` one time to install the generated public key using the provided SSH password. Install `sshpass`, then rerun onboarding.
+SSH onboarding bootstrap needs `sshpass` one time to install the generated public key using the provided SSH password. Install `sshpass`, then rerun onboarding with `--force` flag.
 
 ### Q: What if SSH login works but the public key cannot be installed remotely?
 
@@ -361,7 +360,7 @@ If not, fix remote home directory or permission issues first.
 
 ### Q: What if the generated SSH key exists locally but remote key install never happened?
 
-Treat onboarding as incomplete. Re-run `openvas-cli onboard` and allow it to reinstall the public key, or install the public key manually on the remote host.
+Treat onboarding as incomplete. Re-run `openvas-cli onboard --force` and allow it to reinstall the public key, or install the public key manually on the remote host.
 
 ### Q: What if the remote `gvm-cli` is not in `PATH`?
 
@@ -379,7 +378,7 @@ Use the actual socket path in config:
 OPENVAS_SOCKET_PATH="/run/gvm/gvmd.sock"
 ```
 
-Always verify with a remote socket test if SSH mode fails.
+Always verify with a remote socket test if SSH mode fails. 
 
 ### Q: What if `openvas-cli doctor` fails in SSH mode but the remote socket command works manually?
 
@@ -399,12 +398,10 @@ Prefer `socket` if the CLI runs on the same host as `gvmd`. Prefer `ssh` for rem
 
 If plain SSH works but the remote socket command cannot be made to work reliably, then:
 
-- verify remote `gvm-cli`
-- verify socket access
-- consider `socket` if running locally
+- verify Unix socket access.Specifically check if ssh user is a member of `_gvm` group on remote OpenVAS instance.
+- consider `socket` if running locally on remote OpenVAS instance.
 - consider `tls` only if GMP over TLS is actually configured
 
-Do not fall back to assuming `gvm-cli ssh` will work on CE.
 
 ### Q: What if TLS uses a self-signed certificate?
 
@@ -435,17 +432,17 @@ openvas-cli config list
 openvas-cli scanner list
 ```
 
-### Q: Does onboarding happen on the local machine or remote host?
+### Q: Does onboarding happen on the local Openvas-cli machine or remote OpenVAS instance?
 
 Both:
 
-- local machine: generate SSH keypair, save config, update `known_hosts`
-- remote host: install the generated public key into `authorized_keys`
+- local machine: where to generate SSH keypair, save config, update `known_hosts`
+- remote OpenVAS instance: where to install the generated public key into `authorized_keys` of ssh user's home directory.
 
 ### Q: Does the guide distinguish SSH authentication from GMP authentication?
 
-Yes. SSH authentication is for reaching the remote host. GMP authentication is for talking to `gvmd` after the SSH transport is established.
+Yes. SSH authentication is for reaching the remote OpenVAS instance. GMP authentication is for talking to `gvmd` after the SSH transport is established.
 
 ### Q: Is onboarding safe to re-run?
 
-Yes, but it updates local config and may reinstall or refresh SSH bootstrap state. Re-run onboarding when transport settings, hostnames, credentials, or remote paths change.
+Yes, but it updates local config and may reinstall or refresh SSH bootstrap state. Re-run onboarding with `--force` option to re-write when transport settings, hostnames, credentials, or remote paths change.
