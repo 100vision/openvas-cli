@@ -29,6 +29,8 @@ SOCKET_CANDIDATES = [
 ]
 JSON_INDENT = 2
 JSON_SORT_KEYS = True
+DEFAULT_SSH_PORT = "22"
+SSH_TUNNEL_TIMEOUT = 10
 
 
 class OpenvasCliError(Exception):
@@ -59,10 +61,10 @@ class JumpHostTunnel:
     def __init__(self, jump_host, jump_port, jump_username,
                  target_host, target_port, ssh_identity_file=None):
         self.jump_host = jump_host
-        self.jump_port = jump_port or "22"
+        self.jump_port = jump_port or DEFAULT_SSH_PORT
         self.jump_username = jump_username
         self.target_host = target_host
-        self.target_port = target_port or "22"
+        self.target_port = target_port or DEFAULT_SSH_PORT
         self.ssh_identity_file = ssh_identity_file
         self.local_port = None
         self.process = None
@@ -96,7 +98,7 @@ class JumpHostTunnel:
         )
         self._wait_for_tunnel()
 
-    def _wait_for_tunnel(self, timeout=10):
+    def _wait_for_tunnel(self, timeout=SSH_TUNNEL_TIMEOUT):
         """Poll until the local forwarded port accepts connections."""
         import socket as _socket
         import time
@@ -104,7 +106,7 @@ class JumpHostTunnel:
         while time.time() < deadline:
             if self.process.poll() is not None:
                 stderr = (self.process.stderr.read() or b"").decode().strip()
-                raise OpenvasCliError(f"SSH tunnel exited immediately: {stderr}")
+                raise OpenvasCliError(f"SSH tunnel exited immediately (code {self.process.returncode}): {stderr}")
             try:
                 with _socket.create_connection(("127.0.0.1", self.local_port), timeout=1):
                     return
@@ -468,18 +470,18 @@ class OnboardWriter:
                                jump_host: str = "", jump_port: str = "", jump_ssh_username: str = "") -> str:
         identity = self.ensure_ssh_keypair(identity_path)
         if jump_host:
-            self.add_ssh_host_to_known_hosts(jump_host, jump_port or "22")
+            self.add_ssh_host_to_known_hosts(jump_host, jump_port or DEFAULT_SSH_PORT)
         self.add_ssh_host_to_known_hosts(host, port)
         password = self.prompt_secret("SSH password (used once to install generated public key)", required=True)
         if jump_host:
-            self.install_ssh_public_key(jump_host, jump_port or "22", jump_ssh_username, password, identity)
+            self.install_ssh_public_key(jump_host, jump_port or DEFAULT_SSH_PORT, jump_ssh_username, password, identity)
             print(f"SSH key installed for {jump_ssh_username}@{jump_host}.")
             tunnel = JumpHostTunnel(
                 jump_host=jump_host,
-                jump_port=jump_port or "22",
+                jump_port=jump_port or DEFAULT_SSH_PORT,
                 jump_username=jump_ssh_username,
                 target_host=host,
-                target_port=port or "22",
+                target_port=port or DEFAULT_SSH_PORT,
                 ssh_identity_file=str(identity),
             )
             tunnel.open()
@@ -545,7 +547,7 @@ class OnboardWriter:
             use_jump = self.prompt("Use a jump/bastion host?", default="no", allowed={"yes", "no"})
             if use_jump == "yes":
                 values["OPENVAS_JUMP_HOST"] = self.prompt("Jump host", default=self.current.get("OPENVAS_JUMP_HOST", ""), required=True)
-                values["OPENVAS_JUMP_PORT"] = self.prompt("Jump host SSH port", default=self.current.get("OPENVAS_JUMP_PORT", "22"))
+                values["OPENVAS_JUMP_PORT"] = self.prompt("Jump host SSH port", default=self.current.get("OPENVAS_JUMP_PORT", DEFAULT_SSH_PORT))
                 values["OPENVAS_JUMP_SSH_USERNAME"] = self.prompt("Jump host SSH username", default=self.current.get("OPENVAS_JUMP_SSH_USERNAME", ""), required=True)
             default_identity = self.current.get("OPENVAS_SSH_IDENTITY_FILE", str(Path.home() / ".ssh" / "openvas_cli_ed25519"))
             values["OPENVAS_SSH_IDENTITY_FILE"] = self.bootstrap_ssh_identity(
@@ -1090,11 +1092,11 @@ def command_doctor(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     })
     jump_host = runner.env_value("OPENVAS_JUMP_HOST")
     if jump_host:
-        jump_port = runner.env_value("OPENVAS_JUMP_PORT") or "22"
+        jump_port = runner.env_value("OPENVAS_JUMP_PORT") or DEFAULT_SSH_PORT
         try:
             scan = subprocess.run(
                 ["ssh-keyscan", "-H", "-p", jump_port, jump_host],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=SSH_TUNNEL_TIMEOUT,
             )
             checks.append({
                 "name": "jump_host_reachable",
@@ -1739,8 +1741,10 @@ def main() -> int:
     if args.resource != "onboard":
         jump_host = runner.env_value("OPENVAS_JUMP_HOST")
         if jump_host:
-            jump_port = runner.env_value("OPENVAS_JUMP_PORT") or "22"
+            jump_port = runner.env_value("OPENVAS_JUMP_PORT") or DEFAULT_SSH_PORT
             jump_username = runner.env_value("OPENVAS_JUMP_SSH_USERNAME")
+            if not jump_username:
+                raise OpenvasCliError("OPENVAS_JUMP_SSH_USERNAME is required when OPENVAS_JUMP_HOST is set")
             target_host = runner.env_value("OPENVAS_HOST")
             target_port = runner.env_value("OPENVAS_PORT") or "22"
             ssh_identity_file = runner.env_value("OPENVAS_SSH_IDENTITY_FILE") or None
