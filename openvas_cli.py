@@ -2,6 +2,7 @@
 import argparse
 import ast
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -9,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from base64 import b64decode
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -56,7 +58,13 @@ class GvmResponse:
 
 
 class JumpHostTunnel:
-    """Manages an SSH local port-forward through a jump/bastion host."""
+    """Manages an SSH local port-forward through a jump/bastion host.
+
+    Uses SSH ControlMaster multiplexing so the tunnel is reused across
+    subsequent invocations of openvas-cli.  The first run starts a
+    background SSH process; later runs detect the control socket and
+    skip the setup entirely.
+    """
 
     def __init__(self, jump_host, jump_port, jump_username,
                  target_host, target_port, ssh_identity_file=None):
@@ -66,23 +74,46 @@ class JumpHostTunnel:
         self.target_host = target_host
         self.target_port = target_port or DEFAULT_SSH_PORT
         self.ssh_identity_file = ssh_identity_file
-        self.local_port = None
-        self.process = None
+        self.local_port = self._derive_local_port()
+        safe_host = re.sub(r"[^a-zA-Z0-9._-]", "_", self.jump_host)
+        self.control_socket = Path(tempfile.gettempdir()) / f"openvas-cli-tunnel-{safe_host}-{self.jump_port}.sock"
+
+    def _derive_local_port(self):
+        """Derive a stable local port from the tunnel parameters so the same
+        config always maps to the same port across invocations."""
+        key = f"{self.jump_host}:{self.jump_port}:{self.target_host}:{self.target_port}"
+        digest = int(hashlib.sha256(key.encode()).hexdigest(), 16)
+        return 10000 + (digest % 55000)
+
+    def _is_alive(self):
+        """Check if an existing ControlMaster tunnel is still running."""
+        if not self.control_socket.exists():
+            return False
+        jump_target = f"{self.jump_username}@{self.jump_host}" if self.jump_username else self.jump_host
+        result = subprocess.run(
+            ["ssh", "-S", str(self.control_socket), "-O", "check", jump_target],
+            capture_output=True, text=True,
+        )
+        return result.returncode == 0
 
     def open(self):
-        """Find a free local port, start the SSH tunnel as a background process."""
-        import socket as _socket
-        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            self.local_port = s.getsockname()[1]
+        """Reuse an existing tunnel if alive, otherwise start a new one with ControlMaster."""
+        if self._is_alive():
+            return  # reuse existing tunnel
+
+        # Clean up stale control socket if it exists
+        self.control_socket.unlink(missing_ok=True)
 
         tunnel_cmd = [
-            "ssh", "-N",
+            "ssh", "-f", "-N",
+            "-M",
+            "-S", str(self.control_socket),
             "-L", f"{self.local_port}:{self.target_host}:{self.target_port}",
             "-p", str(self.jump_port),
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=30",
+            "-o", "ControlPersist=10m",
         ]
         if self.ssh_identity_file:
             tunnel_cmd.extend(["-i", self.ssh_identity_file])
@@ -90,12 +121,16 @@ class JumpHostTunnel:
         jump_target = f"{self.jump_username}@{self.jump_host}" if self.jump_username else self.jump_host
         tunnel_cmd.append(jump_target)
 
-        self.process = subprocess.Popen(
+        completed = subprocess.run(
             tunnel_cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+        if completed.returncode != 0:
+            stderr = (completed.stderr or b"").decode().strip()
+            raise OpenvasCliError(f"SSH tunnel failed: {stderr}")
+
         self._wait_for_tunnel()
 
     def _wait_for_tunnel(self, timeout=SSH_TUNNEL_TIMEOUT):
@@ -104,9 +139,6 @@ class JumpHostTunnel:
         import time
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if self.process.poll() is not None:
-                stderr = (self.process.stderr.read() or b"").decode().strip()
-                raise OpenvasCliError(f"SSH tunnel exited immediately (code {self.process.returncode}): {stderr}")
             try:
                 with _socket.create_connection(("127.0.0.1", self.local_port), timeout=1):
                     return
@@ -115,14 +147,18 @@ class JumpHostTunnel:
         raise OpenvasCliError(f"SSH tunnel did not become ready within {timeout}s")
 
     def close(self):
-        """Terminate the background SSH process."""
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
+        """No-op: tunnel persists via ControlPersist for reuse by subsequent commands.
+        The tunnel auto-terminates after 10 minutes of inactivity."""
+        pass
+
+    def force_close(self):
+        """Explicitly tear down the persistent tunnel via the control socket."""
+        if self.control_socket.exists():
+            jump_target = f"{self.jump_username}@{self.jump_host}" if self.jump_username else self.jump_host
+            subprocess.run(
+                ["ssh", "-S", str(self.control_socket), "-O", "exit", jump_target],
+                capture_output=True,
+            )
 
 class GvmCliRunner:
     def __init__(self, args: argparse.Namespace):
@@ -210,6 +246,13 @@ class GvmCliRunner:
         ssh_command: List[str] = ["ssh", "-T", "-p", str(port)]
         if self.args.auto_accept_host:
             ssh_command.extend(["-o", "StrictHostKeyChecking=accept-new"])
+        # When connecting through the jump host tunnel (host is 127.0.0.1),
+        # skip host key checking for the local tunnel endpoint.
+        if host == "127.0.0.1":
+            ssh_command.extend([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+            ])
         if ssh_identity_file:
             ssh_command.extend(["-i", ssh_identity_file])
         target = f"{ssh_username}@{host}" if ssh_username else str(host)
