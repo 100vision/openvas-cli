@@ -1,17 +1,40 @@
 # openvas-cli
 
--  A comand-line tool, to manage a live OpenVAS instance either locally or remotely.
--  Python wrapper around native `gvm-cli` from [GreenBone](https://greenbone.github.io/gvm-tools/index.html) 
+A command-line tool to manage a live OpenVAS instance either locally or remotely — Python wrapper around native `gvm-cli` from [Greenbone](https://greenbone.github.io/gvm-tools/index.html).
+
+## Features
+
+- Remote OpenVAS management via SSH wrapper (no `gvm-cli ssh` required)
+- Jump host / bastion transparent tunneling via SSH ControlMaster
+- Automated SSH key onboarding (generates keypair, installs on remote host)
+- Scan lifecycle management: create, start, stop, resume
+- Credential management: SSH, Windows/SMB, SNMP
+- JSON and compact-JSON output modes (`--json`, `--compact-json`)
+- PDF report export (`report get --format pdf`)
+- GMP query filtering (`--filter`)
+
+## Architecture
+
+```text
+Direct connection:
+  workstation  ──SSH:22──▶  openvas-host  ──▶  gvm-cli socket  ──▶  gvmd.sock
+
+Jump host / bastion:
+  workstation  ──SSH:22──▶  jump-host  ══tunnel══▶  openvas-host:22
+       │                                                 ▲
+       └──SSH to localhost:LOCAL_PORT────────────────────┘
+           (existing commands see this as a direct connection)
+```
 
 ## Prerequisites
 
-Before using `openvas-cli`, make sure these prerequisites are in place.
+Before using `openvas-cli`, make sure these are in place:
 
-1. `python3 3.9+`
-2. `gvm-tools 25.4.9`
-3. `gvm-cli 25.4.9`
+- `python3` 3.9+
+- `gvm-tools` 25.4.9 (provides `gvm-cli`)
+- `sshpass` (required only during SSH onboarding)
 
-If missing, install these dependency packages for Ubuntu or Debian:
+Install on Ubuntu / Debian:
 
 ```bash
 sudo apt-get update
@@ -19,16 +42,7 @@ sudo apt-get install -y python3 python3-venv python3-pipx sshpass
 python3 -m pipx install gvm-tools
 ```
 
-Quick checks:
-
-```bash
-python3 --version
-gvm-cli --version
-```
-
 ## Installation
-
-To install, simply run:
 
 ```bash
 cd openvas-cli
@@ -36,254 +50,137 @@ chmod +x ./install.sh
 ./install.sh install
 ```
 
-Check install status:
+Check status, uninstall, or use a custom directory:
 
 ```bash
-bash ./openvas-cli/install.sh status
+./install.sh status
+./install.sh uninstall
+OPENVAS_CLI_INSTALL_DIR="$HOME/bin" ./install.sh install
 ```
 
-Uninstall the CLI:
+## Quick Start
 
 ```bash
-bash ./openvas-cli/install.sh uninstall
-```
+# 1. Install dependencies and openvas-cli
+sudo apt-get install -y python3 python3-venv python3-pipx sshpass
+python3 -m pipx install gvm-tools
+./install.sh install
 
-Use a custom install directory:
-
-```bash
-OPENVAS_CLI_INSTALL_DIR="$HOME/bin" bash ./openvas-cli/install.sh install
-```
-
-
-## Onboarding
-
-Upon installation, run:
-
-```bash
+# 2. Onboard (first-time setup — prompts for host, credentials, SSH key install)
 openvas-cli onboard
+
+# 3. Verify connectivity
+openvas-cli doctor
+
+# 4. Run your first scan
+openvas-cli config list --details
+openvas-cli credential list
+openvas-cli scan create --hosts 192.168.11.10-254 \
+  --credential WindowsServer \
+  --scan-config "Window-ClientOS" \
+  --port-list "All IANA assigned TCP"
 ```
 
-This starts first-time setup and saves the collected values to `~/.config/openvas-cli/openvas-cli.conf`,the file is protected with permission `600` on Linux native filesystems.
+`onboard` saves config to `~/.config/openvas-cli/openvas-cli.conf` (mode `600`), generates an SSH keypair, and installs the public key on the remote host. See [AI_AGENT_GUIDE.md](AI_AGENT_GUIDE.md) §4 for a detailed walkthrough of onboarding behavior.
 
-### Supported connection options
+## Subcommands
 
-- `ssh`
-- `socket`
-- `tls`
+| Subcommand | Description |
+|---|---|
+| `onboard` | First-time setup: collect connection details, generate SSH keys, install public key on remote host |
+| `doctor` | Verify connectivity, SSH reachability, remote socket, and GMP credentials |
+| `system version` | Print the remote GVM / OpenVAS version |
+| `target list\|get\|create\|update` | Manage scan targets (hosts, port lists, credentials) |
+| `task list\|get\|create\|update\|start\|stop\|resume` | Manage scan tasks and control their lifecycle |
+| `report list\|get` | List or retrieve scan reports (supports PDF export) |
+| `config list\|get` | Discover available scan configurations |
+| `scanner list` | List available scanners |
+| `credential list\|get\|create\|update\|delete` | Manage scan credentials (SSH, Windows, SNMP) |
+| `report-format list` | List available report formats |
+| `scan create` | High-level workflow: find/create target + task, then start the scan |
 
-### SSH onboarding behavior
+## Connection Modes
 
-For `ssh` transport, onboarding now bootstraps key-based access for the user automatically:
+SSH is the default transport when `--transport` and `OPENVAS_TRANSPORT` are not set. `openvas-cli` uses plain SSH to run `gvm-cli socket` on the remote host, which avoids the Greenbone Community Edition limitation where `gvm-cli ssh` is not available out of the box. Socket and TLS transports are also supported for local or TLS-configured deployments.
 
-1. asks for remote host, port, SSH username, and SSH password
-2. generates a local SSH keypair if one does not already exist
-3. adds the remote OpenVAS host to `~/.ssh/known_hosts`
-4. installs the generated public key into the remote user's `authorized_keys`
-5. saves the generated identity path in the local config file
+| Transport | When to use |
+|---|---|
+| `ssh` | Default — remote Greenbone Community Edition access |
+| `socket` | Local — when running on the same host as `gvmd` |
+| `tls` | When GMP over TLS is explicitly configured on the server |
 
-After onboarding, users can run `openvas-cli doctor`, `openvas-cli task list`, and other subcommands without explicitly passing an identity file or doing extra SSH setup.
+## Jump Host / Bastion
 
-Default generated SSH key path:
+When `OPENVAS_JUMP_HOST` is set, `openvas-cli` automatically opens a persistent SSH ControlMaster tunnel through the jump host before running any command. The tunnel is reused across invocations (`ControlPersist=10m`) and is transparent to all subcommands.
+
+Add these three keys to `openvas-cli.conf`:
 
 ```bash
-~/.ssh/openvas_cli_ed25519
-```
-
-Note:
-
-- local `sshpass` is required only during onboarding when installing the generated public key
-- normal runtime commands use SSH key authentication and do not require `sshpass`
-- remote `gvm-cli` must be available on the OpenVAS host
-
-## Jump Host / Bastion Support
-
-Use a jump/bastion host when the OpenVAS instance is not directly reachable from your workstation.
-
-```text
-WITHOUT jump host (current):
-  workstation  ──SSH:22──▶  openvas-host  ──▶  gvm-cli socket  ──▶  gvmd.sock
-
-WITH jump host (tunnel wrapper):
-  workstation  ──SSH:22──▶  jump-host  ══tunnel══▶  openvas-host:22
-       │                                                 ▲
-       └──SSH to localhost:LOCAL_PORT────────────────────┘
-           (existing commands see this as a direct connection)
-```
-
-### How it works
-
-When `OPENVAS_JUMP_HOST` is set, `openvas-cli` automatically opens a background SSH local port-forward through the jump host before running any command. Existing SSH command patterns are not modified — they simply connect to `127.0.0.1:<local_port>` instead of the real host.
-
-### Jump host config
-
-Add these optional values to `openvas-cli.conf`:
-
-```bash
-OPENVAS_TRANSPORT="ssh"
-OPENVAS_HOST="openvas-internal.corp"
-OPENVAS_PORT="22"
-OPENVAS_SSH_USERNAME="gmp"
-OPENVAS_SSH_IDENTITY_FILE="/home/user/.ssh/openvas_cli_ed25519"
 OPENVAS_JUMP_HOST="bastion.example.com"
 OPENVAS_JUMP_PORT="22"
 OPENVAS_JUMP_SSH_USERNAME="jumpuser"
 ```
 
-The same SSH identity file is used for both the jump host and the final OpenVAS host.
+Run `openvas-cli onboard` — when prompted, answer `yes` to jump host setup. Onboarding installs the SSH public key on both the jump host and the final OpenVAS host. After onboarding, `openvas-cli doctor` includes a `jump_host_reachable` check.
 
-### Onboarding with a jump host
+## Configuration Reference
 
-Run `openvas-cli onboard` as usual. When using SSH transport, onboarding will ask:
+All keys are stored in `~/.config/openvas-cli/openvas-cli.conf`.
 
-```
-Use a jump/bastion host? [yes/no]:
-```
+| Key | Description | Default |
+|---|---|---|
+| `OPENVAS_TRANSPORT` | Transport mode: `ssh`, `socket`, or `tls` | `ssh` |
+| `OPENVAS_HOST` | Remote OpenVAS hostname or IP | — |
+| `OPENVAS_PORT` | SSH port on the OpenVAS host | `22` |
+| `OPENVAS_SSH_USERNAME` | SSH login username on the OpenVAS host | — |
+| `OPENVAS_SSH_IDENTITY_FILE` | Path to the SSH private key | `~/.ssh/openvas_cli_ed25519` |
+| `OPENVAS_REMOTE_GVM_CLI_BIN` | Path to `gvm-cli` on the remote host | `gvm-cli` |
+| `OPENVAS_SOCKET_PATH` | Unix socket path for `gvmd` on the remote host | `/run/gvmd/gvmd.sock` |
+| `OPENVAS_GMP_USERNAME` | GMP (OpenVAS) login username | — |
+| `OPENVAS_GMP_PASSWORD` | GMP (OpenVAS) login password | — |
+| `OPENVAS_JUMP_HOST` | Jump / bastion host hostname or IP (optional) | — |
+| `OPENVAS_JUMP_PORT` | SSH port on the jump host | `22` |
+| `OPENVAS_JUMP_SSH_USERNAME` | SSH login username on the jump host | — |
 
-If you answer `yes`, onboarding will:
-
-1. add the jump host key to `~/.ssh/known_hosts`
-2. add the OpenVAS host key to `~/.ssh/known_hosts`
-3. prompt once for the SSH password
-4. install the generated public key on the jump host directly
-5. open a temporary tunnel through the jump host and install the public key on the OpenVAS host through it
-
-After onboarding, all runtime commands (`doctor`, `task list`, `scan create`, etc.) use the tunnel transparently.
-
-### Jump host reachability check
-
-`openvas-cli doctor` includes a `jump_host_reachable` check when `OPENVAS_JUMP_HOST` is configured:
-
-```
-OK jump_host_reachable: bastion.example.com:22
-```
-
-## Quick Start
-
-Shortest path from install to first scan:
+## Common Examples
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y python3 python3-pip python3-venv pipx
-python3 -m pip install gvm-tools
-export PATH="$HOME/.local/bin:$PATH"
-
-bash ./openvas-cli/install.sh install
-openvas-cli onboard
-openvas-cli doctor
-openvas-cli credential list --filter "name~Windows"
-openvas-cli config list --details
-openvas-cli scan create --hosts 192.168.11.10-254 --credential WindowsServer --scan-config "Window-ClientOS" --port-range T:1-65535 --port-list "All IANA assigned TCP"
-
-### create a scan task with built-in/preset port-list "All IANA assigned TCP"
-openvas-cli scan create --hosts 192.168.11.10-254 --credential WindowsServer --scan-config "Window-ClientOS" --port-list "All IANA assigned TCP"
-```
-
-## Subcommands
-
--  `openvas-cli onboard`
-- `openvas-cli doctor`
-- `openvas-cli system version`
-- `openvas-cli target list|get|create|update`
-- `openvas-cli task list|get|create|update|start|stop|resume`
-- `openvas-cli report list|get`
-- `openvas-cli config list`
-- `openvas-cli config get`
-- `openvas-cli scanner list`
-- `openvas-cli credential list|get|create|update|delete`
-- `openvas-cli report-format list`
-- `openvas-cli scan create`
-
-Use `openvas-cli config list` to discover available scan configs. The CLI requests the full scan config set with `usage_type=scan` and disables default pagination before you choose one for `--scan-config`. Add `--details`, `--tasks`, or `--preferences` for richer output, or use `openvas-cli config get --name "Window-ClientOS" --details`.
-
-Examples:
-
-```bash
+# JSON and compact-JSON output
 openvas-cli --json config list
 openvas-cli --compact-json config get --name "Window-ClientOS" --details
+
+# Filter tasks by status
+openvas-cli --json task list --filter "status~running"
+
+# Filter credentials by name
+openvas-cli credential list --filter "name~Windows"
+
+# Export a PDF report
+openvas-cli report get --id REPORT_ID --format pdf --output report.pdf
 ```
 
-## Query Filtering
-
-- filter tasks by task status with a running state.
-```bash
- openvas-cli --json task list --filter "status~running"
-```
-filtered output be like:
+Example filtered output:
 
 ```json
 {
   "tasks": [
     {
-      "config_id": "90247c21-5118-4150-95fe-96763f29a3eb",
-      "config_name": "Window-ClientOS",
       "id": "c343d933-f8ca-452a-8e6b-ee7127592c67",
-      "last_report_id": "",
       "name": "Scan 192.168.20.10-254",
-      "progress": "5",
-      "scanner_id": "08b69003-5fc2-4037-a479-93b440211c73",
-      "scanner_name": "OpenVAS Default",
       "status": "Running",
-      "target_id": "6a732345-786e-4aae-9a95-3f99514669fb",
+      "progress": "5",
+      "config_name": "Window-ClientOS",
       "target_name": "Target 192.168.20.10-254"
     }
   ]
 }
-
 ```
 
-## Usage Notes
+## Credential Management
 
-### Access to a running GreenBone Openvas instance 
+Manage scan credentials for authenticated scans.
 
-SSH is the default transport if `--transport` and `OPENVAS_TRANSPORT` are not set.
-
-For Greenbone Community Edition, `openvas-cli` uses plain SSH to run a remote `gvm-cli socket` command instead of relying on `gvm-cli ssh`. This avoids the Community Edition limitation where direct `gvm-cli ssh` support is typically not available out of the box.
-
-The SSH wrapper uses the configured remote socket path, typically:
-
-```bash
-/run/gvmd/gvmd.sock
-```
-
-Relevant SSH config values saved by onboarding:
-
-```bash
-OPENVAS_TRANSPORT="ssh"
-OPENVAS_HOST="openvas.example.com"
-OPENVAS_PORT="22"
-OPENVAS_SSH_USERNAME="tlin"
-OPENVAS_SSH_IDENTITY_FILE="/home/tlin/.ssh/openvas_cli_ed25519"
-OPENVAS_REMOTE_GVM_CLI_BIN="gvm-cli"
-OPENVAS_SOCKET_PATH="/run/gvmd/gvmd.sock"
-OPENVAS_GMP_USERNAME="admin"
-OPENVAS_GMP_PASSWORD="..."
-```
-
-With those values in place, normal commands stay unchanged:
-
-```bash
-openvas-cli doctor
-openvas-cli system version
-openvas-cli task list
-```
-
-### Scan Tasks
-
-`scan create` is the high level workflow.
-
-It will find or create the target, find or create the task, update mismatched target or task bindings, and start the task unless it is already running.
-
-For new targets, GMP 22.7 needs either `--port-list` or `--port-range`.
-
-### Scan Reporting and Exports
-
-`report get --format pdf` requires `--output` because the PDF is returned as base64 inside XML.
-
-### Credential Management
-
-Manage scan credentials for authenticated scans (SSH, Windows, SNMP).
-
-#### Credential Types
+### Credential Types
 
 | Type | Code | Description |
 |------|------|-------------|
@@ -291,7 +188,7 @@ Manage scan credentials for authenticated scans (SSH, Windows, SNMP).
 | Username + SSH Key | `usk` | For Linux/Unix SSH authentication |
 | SNMP | `snmp` | For network devices (v1/v2 community or v3) |
 
-#### Create Credentials
+### Create
 
 ```bash
 # Username + Password (prompts for password)
@@ -300,7 +197,7 @@ openvas-cli credential create --name "Windows Admin" --type up --username admini
 # SSH Key (prompts for passphrase if needed)
 openvas-cli credential create --name "Linux Root" --type usk --username root --private-key ~/.ssh/id_rsa
 
-# SNMP v1/v2 (community)
+# SNMP v1/v2 (community string)
 openvas-cli credential create --name "Router SNMP" --type snmp --community public
 
 # SNMP v3 with auth and privacy
@@ -310,38 +207,47 @@ openvas-cli credential create --name "SNMP v3" --type snmp \
   --snmp-priv-protocol aes
 ```
 
-#### Get Credential Details
+### Get / List
 
 ```bash
-# List credentials
 openvas-cli credential list
-
-# Get credential by name
 openvas-cli credential get --name "Windows Admin"
-
-# Get credential details (excludes secrets)
 openvas-cli credential get --name "Windows Admin" --details
 ```
 
-#### Update Credentials
+### Update
 
 ```bash
-# Update username
 openvas-cli credential update --name "Windows Admin" --username newadmin
-
-# Update password (prompts)
 openvas-cli credential update --name "Windows Admin" --password
 ```
 
-#### Delete Credentials
+### Delete
 
 ```bash
-# Delete (fails if in use by targets)
 openvas-cli credential delete --name "Windows Admin"
-
-# Force delete (even if in use)
 openvas-cli credential delete --name "Windows Admin" --force
 ```
 
 **Note:** Credentials in use cannot be deleted. Remove them from targets first using `target update`.
+
+## Troubleshooting
+
+Run `openvas-cli doctor` after any configuration change. It checks SSH reachability, the remote socket, GMP credentials, and (if configured) jump host reachability.
+
+Common failure checklist:
+
+1. Remote SSH login works with the configured identity file
+2. `gvm-cli` exists on the remote host (`ssh user@host 'command -v gvm-cli'`)
+3. Remote socket path matches `OPENVAS_SOCKET_PATH` (`ls -l /run/gvmd/gvmd.sock`)
+4. Remote SSH user is a member of the `_gvm` group
+5. GMP username and password are correct in config
+6. Jump host hostname, port, and SSH key are correct (if using a bastion)
+
+See [AI_AGENT_GUIDE.md](AI_AGENT_GUIDE.md) §9 for a detailed troubleshooting checklist.
+
+## Links
+
+- [AI Agent Guide](AI_AGENT_GUIDE.md) — detailed onboarding behavior, config reference, and troubleshooting for automated agents
+- [Greenbone gvm-tools documentation](https://greenbone.github.io/gvm-tools/index.html)
 
