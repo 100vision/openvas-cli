@@ -29,6 +29,8 @@ SOCKET_CANDIDATES = [
 ]
 JSON_INDENT = 2
 JSON_SORT_KEYS = True
+DEFAULT_SSH_PORT = "22"
+SSH_TUNNEL_TIMEOUT = 10
 
 
 class OpenvasCliError(Exception):
@@ -51,6 +53,76 @@ class GvmResponse:
     def first(self, tag: str) -> Optional[ET.Element]:
         return self.root.find(f"./{tag}")
 
+
+
+class JumpHostTunnel:
+    """Manages an SSH local port-forward through a jump/bastion host."""
+
+    def __init__(self, jump_host, jump_port, jump_username,
+                 target_host, target_port, ssh_identity_file=None):
+        self.jump_host = jump_host
+        self.jump_port = jump_port or DEFAULT_SSH_PORT
+        self.jump_username = jump_username
+        self.target_host = target_host
+        self.target_port = target_port or DEFAULT_SSH_PORT
+        self.ssh_identity_file = ssh_identity_file
+        self.local_port = None
+        self.process = None
+
+    def open(self):
+        """Find a free local port, start the SSH tunnel as a background process."""
+        import socket as _socket
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            self.local_port = s.getsockname()[1]
+
+        tunnel_cmd = [
+            "ssh", "-N",
+            "-L", f"{self.local_port}:{self.target_host}:{self.target_port}",
+            "-p", str(self.jump_port),
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=30",
+        ]
+        if self.ssh_identity_file:
+            tunnel_cmd.extend(["-i", self.ssh_identity_file])
+
+        jump_target = f"{self.jump_username}@{self.jump_host}" if self.jump_username else self.jump_host
+        tunnel_cmd.append(jump_target)
+
+        self.process = subprocess.Popen(
+            tunnel_cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        self._wait_for_tunnel()
+
+    def _wait_for_tunnel(self, timeout=SSH_TUNNEL_TIMEOUT):
+        """Poll until the local forwarded port accepts connections."""
+        import socket as _socket
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.process.poll() is not None:
+                stderr = (self.process.stderr.read() or b"").decode().strip()
+                raise OpenvasCliError(f"SSH tunnel exited immediately (code {self.process.returncode}): {stderr}")
+            try:
+                with _socket.create_connection(("127.0.0.1", self.local_port), timeout=1):
+                    return
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.3)
+        raise OpenvasCliError(f"SSH tunnel did not become ready within {timeout}s")
+
+    def close(self):
+        """Terminate the background SSH process."""
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
 
 class GvmCliRunner:
     def __init__(self, args: argparse.Namespace):
@@ -296,6 +368,9 @@ class OnboardWriter:
             "OPENVAS_TLS_CERTFILE",
             "OPENVAS_TLS_KEYFILE",
             "OPENVAS_TLS_CAFILE",
+            "OPENVAS_JUMP_HOST",
+            "OPENVAS_JUMP_PORT",
+            "OPENVAS_JUMP_SSH_USERNAME",
         ]:
             value = values.get(key, "")
             if value:
@@ -391,12 +466,33 @@ class OnboardWriter:
         if completed.returncode != 0:
             raise OpenvasCliError((completed.stderr or completed.stdout or "failed to install SSH public key").strip())
 
-    def bootstrap_ssh_identity(self, host: str, port: str, ssh_username: str, identity_path: str) -> str:
+    def bootstrap_ssh_identity(self, host: str, port: str, ssh_username: str, identity_path: str,
+                               jump_host: str = "", jump_port: str = "", jump_ssh_username: str = "") -> str:
         identity = self.ensure_ssh_keypair(identity_path)
+        if jump_host:
+            self.add_ssh_host_to_known_hosts(jump_host, jump_port or DEFAULT_SSH_PORT)
         self.add_ssh_host_to_known_hosts(host, port)
         password = self.prompt_secret("SSH password (used once to install generated public key)", required=True)
-        self.install_ssh_public_key(host, port, ssh_username, password, identity)
-        print(f"SSH key installed for {ssh_username}@{host}. Future commands will use {identity}.")
+        if jump_host:
+            self.install_ssh_public_key(jump_host, jump_port or DEFAULT_SSH_PORT, jump_ssh_username, password, identity)
+            print(f"SSH key installed for {jump_ssh_username}@{jump_host}.")
+            tunnel = JumpHostTunnel(
+                jump_host=jump_host,
+                jump_port=jump_port or DEFAULT_SSH_PORT,
+                jump_username=jump_ssh_username,
+                target_host=host,
+                target_port=port or DEFAULT_SSH_PORT,
+                ssh_identity_file=str(identity),
+            )
+            tunnel.open()
+            try:
+                self.install_ssh_public_key("127.0.0.1", str(tunnel.local_port), ssh_username, password, identity)
+            finally:
+                tunnel.close()
+            print(f"SSH key installed for {ssh_username}@{host} through jump host. Future commands will use {identity}.")
+        else:
+            self.install_ssh_public_key(host, port, ssh_username, password, identity)
+            print(f"SSH key installed for {ssh_username}@{host}. Future commands will use {identity}.")
         return str(identity)
 
     def detect_socket_paths(self) -> List[str]:
@@ -448,12 +544,20 @@ class OnboardWriter:
 
         if transport == "ssh":
             values["OPENVAS_SSH_USERNAME"] = self.prompt("SSH username", default=self.current.get("OPENVAS_SSH_USERNAME", "gmp"), required=True)
+            use_jump = self.prompt("Use a jump/bastion host?", default="no", allowed={"yes", "no"})
+            if use_jump == "yes":
+                values["OPENVAS_JUMP_HOST"] = self.prompt("Jump host", default=self.current.get("OPENVAS_JUMP_HOST", ""), required=True)
+                values["OPENVAS_JUMP_PORT"] = self.prompt("Jump host SSH port", default=self.current.get("OPENVAS_JUMP_PORT", DEFAULT_SSH_PORT))
+                values["OPENVAS_JUMP_SSH_USERNAME"] = self.prompt("Jump host SSH username", default=self.current.get("OPENVAS_JUMP_SSH_USERNAME", ""), required=True)
             default_identity = self.current.get("OPENVAS_SSH_IDENTITY_FILE", str(Path.home() / ".ssh" / "openvas_cli_ed25519"))
             values["OPENVAS_SSH_IDENTITY_FILE"] = self.bootstrap_ssh_identity(
                 values["OPENVAS_HOST"],
                 values["OPENVAS_PORT"],
                 values["OPENVAS_SSH_USERNAME"],
                 default_identity,
+                jump_host=values.get("OPENVAS_JUMP_HOST", ""),
+                jump_port=values.get("OPENVAS_JUMP_PORT", ""),
+                jump_ssh_username=values.get("OPENVAS_JUMP_SSH_USERNAME", ""),
             )
             values["OPENVAS_REMOTE_GVM_CLI_BIN"] = self.prompt("Remote gvm-cli path", default=self.current.get("OPENVAS_REMOTE_GVM_CLI_BIN", "gvm-cli"), required=True)
 
@@ -986,6 +1090,25 @@ def command_doctor(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         "ok": True,
         "detail": str(runner.env_file) if runner.env_file.exists() else f"not found: {runner.env_file}",
     })
+    jump_host = runner.env_value("OPENVAS_JUMP_HOST")
+    if jump_host:
+        jump_port = runner.env_value("OPENVAS_JUMP_PORT") or DEFAULT_SSH_PORT
+        try:
+            scan = subprocess.run(
+                ["ssh-keyscan", "-H", "-p", jump_port, jump_host],
+                capture_output=True, text=True, timeout=SSH_TUNNEL_TIMEOUT,
+            )
+            checks.append({
+                "name": "jump_host_reachable",
+                "ok": scan.returncode == 0 and bool(scan.stdout.strip()),
+                "detail": f"{jump_host}:{jump_port}",
+            })
+        except subprocess.TimeoutExpired:
+            checks.append({
+                "name": "jump_host_reachable",
+                "ok": False,
+                "detail": f"timeout: {jump_host}:{jump_port}",
+            })
     if checks[0]["ok"]:
         try:
             checks.append({"name": "gvm-cli-version", "ok": True, "detail": runner.gvm_cli_version()})
@@ -1614,12 +1737,41 @@ def main() -> int:
     if args.compact_json:
         JSON_INDENT = None
     runner = GvmCliRunner(args)
+    tunnel = None
+    if args.resource != "onboard":
+        jump_host = runner.env_value("OPENVAS_JUMP_HOST")
+        if jump_host:
+            jump_port = runner.env_value("OPENVAS_JUMP_PORT") or DEFAULT_SSH_PORT
+            jump_username = runner.env_value("OPENVAS_JUMP_SSH_USERNAME")
+            if not jump_username:
+                raise OpenvasCliError("OPENVAS_JUMP_SSH_USERNAME is required when OPENVAS_JUMP_HOST is set")
+            target_host = runner.env_value("OPENVAS_HOST")
+            target_port = runner.env_value("OPENVAS_PORT") or "22"
+            ssh_identity_file = runner.env_value("OPENVAS_SSH_IDENTITY_FILE") or None
+            tunnel = JumpHostTunnel(
+                jump_host=jump_host,
+                jump_port=jump_port,
+                jump_username=jump_username,
+                target_host=target_host,
+                target_port=target_port,
+                ssh_identity_file=ssh_identity_file,
+            )
+            tunnel.open()
+            runner.env["OPENVAS_HOST"] = "127.0.0.1"
+            runner.env["OPENVAS_PORT"] = str(tunnel.local_port)
+            if not args.hostname:
+                args.hostname = "127.0.0.1"
+            if not args.port:
+                args.port = tunnel.local_port
     try:
         dispatch(args, runner)
         return 0
     except OpenvasCliError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        if tunnel is not None:
+            tunnel.close()
 
 
 if __name__ == "__main__":

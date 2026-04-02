@@ -95,6 +95,68 @@ Note:
 - normal runtime commands use SSH key authentication and do not require `sshpass`
 - remote `gvm-cli` must be available on the OpenVAS host
 
+## Jump Host / Bastion Support
+
+Use a jump/bastion host when the OpenVAS instance is not directly reachable from your workstation.
+
+```text
+WITHOUT jump host (current):
+  workstation  ──SSH:22──▶  openvas-host  ──▶  gvm-cli socket  ──▶  gvmd.sock
+
+WITH jump host (tunnel wrapper):
+  workstation  ──SSH:22──▶  jump-host  ══tunnel══▶  openvas-host:22
+       │                                                 ▲
+       └──SSH to localhost:LOCAL_PORT────────────────────┘
+           (existing commands see this as a direct connection)
+```
+
+### How it works
+
+When `OPENVAS_JUMP_HOST` is set, `openvas-cli` automatically opens a background SSH local port-forward through the jump host before running any command. Existing SSH command patterns are not modified — they simply connect to `127.0.0.1:<local_port>` instead of the real host.
+
+### Jump host config
+
+Add these optional values to `openvas-cli.conf`:
+
+```bash
+OPENVAS_TRANSPORT="ssh"
+OPENVAS_HOST="openvas-internal.corp"
+OPENVAS_PORT="22"
+OPENVAS_SSH_USERNAME="gmp"
+OPENVAS_SSH_IDENTITY_FILE="/home/user/.ssh/openvas_cli_ed25519"
+OPENVAS_JUMP_HOST="bastion.example.com"
+OPENVAS_JUMP_PORT="22"
+OPENVAS_JUMP_SSH_USERNAME="jumpuser"
+```
+
+The same SSH identity file is used for both the jump host and the final OpenVAS host.
+
+### Onboarding with a jump host
+
+Run `openvas-cli onboard` as usual. When using SSH transport, onboarding will ask:
+
+```
+Use a jump/bastion host? [yes/no]:
+```
+
+If you answer `yes`, onboarding will:
+
+1. add the jump host key to `~/.ssh/known_hosts`
+2. add the OpenVAS host key to `~/.ssh/known_hosts`
+3. prompt once for the SSH password
+4. install the generated public key on the jump host directly
+5. open a temporary tunnel through the jump host and install the public key on the OpenVAS host through it
+
+After onboarding, all runtime commands (`doctor`, `task list`, `scan create`, etc.) use the tunnel transparently.
+
+### Jump host reachability check
+
+`openvas-cli doctor` includes a `jump_host_reachable` check when `OPENVAS_JUMP_HOST` is configured:
+
+```
+OK jump_host_reachable: bastion.example.com:22
+```
+
 ## Quick Start
 
 Shortest path from install to first scan:

@@ -12,6 +12,17 @@ For Greenbone Community Edition, `openvas-cli` uses:
 ```text
 remote workstation( where openvas-cli is installed)   -> local ssh   -> remote gvm-cli socket   -> remote gvmd socket
 ```
+
+When a jump/bastion host is configured:
+
+```text
+workstation  ──SSH──▶  jump-host  ══tunnel══▶  openvas-host:22
+     │                                               ▲
+     └──SSH to localhost:LOCAL_PORT──────────────────┘
+```
+
+The tunnel is opened transparently in the background before any command runs. Existing SSH command patterns are not modified.
+
 ---
 
 ## Prerequisites
@@ -95,13 +106,15 @@ Default transport is `ssh` if nothing else is set.
 ### What onboarding does in SSH mode
 
 1. asks for remote OpenVAS host, port, and SSH username
-2. generates a local SSH keypair if missing
-3. adds the remote host to `~/.ssh/known_hosts`
-4. prompts once for the SSH password
-5. installs the generated public key into the remote user's `authorized_keys`
-6. stores the SSH identity path in config
-7. stores the remote `gvm-cli` path in config
-8. stores GMP credentials in config
+2. asks whether to use a jump/bastion host (if yes: prompts for jump host, port, and username)
+3. generates a local SSH keypair if missing
+4. adds the jump host (if any) and the remote host to `~/.ssh/known_hosts`
+5. prompts once for the SSH password
+6. installs the generated public key on the jump host directly (if configured)
+7. opens a temporary tunnel through the jump host and installs the public key on the OpenVAS host through it (if jump host configured), or installs directly otherwise
+8. stores the SSH identity path in config
+9. stores the remote `gvm-cli` path in config
+10. stores GMP credentials in config
 
 Default generated key path:
 
@@ -143,6 +156,16 @@ OPENVAS_SOCKET_PATH="/run/gvmd/gvmd.sock"
 OPENVAS_GMP_USERNAME="admin"
 OPENVAS_GMP_PASSWORD="..."
 ```
+
+Optional jump host config keys (all three required when using a jump host):
+
+```bash
+OPENVAS_JUMP_HOST="bastion.example.com"
+OPENVAS_JUMP_PORT="22"
+OPENVAS_JUMP_SSH_USERNAME="jumpuser"
+```
+
+The same SSH identity file (`OPENVAS_SSH_IDENTITY_FILE`) is used for both the jump host and the final OpenVAS host.
 
 
 ---
@@ -400,6 +423,44 @@ Both:
 ### Q: Does the guide distinguish SSH authentication from GMP authentication?
 
 Yes. SSH authentication is for reaching the remote OpenVAS instance. GMP authentication is for talking to `gvmd` after the SSH transport is established.
+
+### Q: How do I use a jump/bastion host?
+
+Set these three config values in `openvas-cli.conf`:
+
+```bash
+OPENVAS_JUMP_HOST="bastion.example.com"
+OPENVAS_JUMP_PORT="22"
+OPENVAS_JUMP_SSH_USERNAME="jumpuser"
+```
+
+`openvas-cli` opens a background SSH port-forward through the jump host before each command. The tunnel is transparent — all existing commands work unchanged.
+
+Run `openvas-cli onboard` to set up jump host support interactively. Onboarding installs the SSH public key on both the jump host and the final OpenVAS host.
+
+### Q: What if `openvas-cli doctor` shows `jump_host_reachable: FAIL`?
+
+Check these in order:
+
+1. the jump host hostname or IP is correct in `OPENVAS_JUMP_HOST`
+2. `OPENVAS_JUMP_PORT` matches the SSH port on the jump host (default `22`)
+3. the jump host is network-reachable from the workstation
+4. firewall rules allow outbound SSH to the jump host
+
+Manual reachability test:
+
+```bash
+ssh-keyscan -H -p 22 bastion.example.com
+```
+
+### Q: What if the tunnel opens but commands still fail?
+
+Check in order:
+
+1. SSH key is installed on the jump host (`ssh jumpuser@bastion.example.com` with the identity file)
+2. SSH key is also installed on the final OpenVAS host
+3. `OPENVAS_HOST` and `OPENVAS_PORT` are the OpenVAS host values, not the jump host values
+4. re-run `openvas-cli onboard --force` to reinstall keys on both hosts
 
 ### Q: Is openvas-cli onboarding safe to re-run?
 
