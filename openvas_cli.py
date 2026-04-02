@@ -121,15 +121,29 @@ class JumpHostTunnel:
         jump_target = f"{self.jump_username}@{self.jump_host}" if self.jump_username else self.jump_host
         tunnel_cmd.append(jump_target)
 
-        completed = subprocess.run(
-            tunnel_cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        if completed.returncode != 0:
-            stderr = (completed.stderr or b"").decode().strip()
-            raise OpenvasCliError(f"SSH tunnel failed: {stderr}")
+        # Use a temporary file for stderr and proc.wait() instead of subprocess.run()
+        # to avoid a deadlock on older OpenSSH versions (e.g. 8.4): when ssh -f forks
+        # a daemon, the daemon inherits the write end of the stderr pipe and keeps it
+        # open, causing communicate() (used internally by subprocess.run) to block
+        # indefinitely until the daemon exits. A plain file fd has no such blocking
+        # semantics, and proc.wait() returns as soon as the foreground ssh process
+        # exits without waiting for the daemon to close any inherited descriptor.
+        # start_new_session=True isolates the SSH process in its own session so it is
+        # not affected by the parent's process group or controlling terminal, which can
+        # cause subtle failures on older systems.
+        with tempfile.TemporaryFile() as stderr_tmp:
+            proc = subprocess.Popen(
+                tunnel_cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_tmp,
+                start_new_session=True,
+            )
+            returncode = proc.wait()
+            if returncode != 0:
+                stderr_tmp.seek(0)
+                stderr = stderr_tmp.read().decode(errors="replace").strip()
+                raise OpenvasCliError(f"SSH tunnel failed: {stderr}")
 
         self._wait_for_tunnel()
 
