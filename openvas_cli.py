@@ -1363,8 +1363,10 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     if format_value == "xml" and not args.output:
         # For JSON output fetch the native GMP report (no format plugin) so that
         # vulnerability results are directly accessible as XML child elements.
+        # details="1" is required for GMP to include results in the response.
         # filter="rows=-1" removes GMP's default result-count pagination.
         request = _make_simple_request("get_reports", report_id=args.id)
+        request.set("details", "1")
         request.set("filter", "rows=-1")
         request.set("ignore_pagination", "1")
         response = runner.invoke_xml(request)
