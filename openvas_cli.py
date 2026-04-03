@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import ast
+import binascii
 import getpass
 import hashlib
 import json
@@ -978,6 +979,32 @@ def _report_json(node: ET.Element) -> Dict:
     }
 
 
+def _report_detail_json(node: ET.Element) -> Dict:
+    """Extract detailed report data including vulnerability results from a <report> XML element."""
+    task = node.find("task")
+    results = []
+    for result in node.findall(".//results/result"):
+        nvt = result.find("nvt")
+        results.append({
+            "id": result.attrib.get("id", ""),
+            "host": result.findtext("host", default="").strip(),
+            "port": result.findtext("port", default=""),
+            "nvt_oid": nvt.attrib.get("oid", "") if nvt is not None else "",
+            "nvt_name": nvt.findtext("name", default="") if nvt is not None else "",
+            "severity": result.findtext("severity", default=""),
+            "threat": result.findtext("threat", default=""),
+            "description": result.findtext("description", default=""),
+        })
+    return {
+        "id": node.attrib.get("id", ""),
+        "format_id": node.attrib.get("format_id", ""),
+        "task_name": task.findtext("name", default="") if task is not None else "",
+        "scan_run_status": node.findtext("scan_run_status", default=""),
+        "timestamp": node.findtext("timestamp", default=""),
+        "results": results,
+    }
+
+
 def _generic_named_json(node: ET.Element) -> Dict:
     return {
         "id": node.attrib.get("id", ""),
@@ -1340,15 +1367,22 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
             Path(args.output).write_text(response.raw_xml, encoding="utf-8")
             _json_print({"id": args.id, "output": args.output, "format_id": format_id})
             return
-        sys.stdout.write(response.raw_xml)
-        if not response.raw_xml.endswith("\n"):
-            sys.stdout.write("\n")
+        inner = report.find("report") or report
+        _json_print({"report": _report_detail_json(inner)})
         return
 
     if not args.output:
         raise OpenvasCliError("binary report export requires --output")
-    payload = "".join(report.itertext()).strip()
-    Path(args.output).write_bytes(b64decode(payload.encode("ascii")))
+    inner = report.find("report") or report
+    payload = (inner.text or "").strip()
+    if not payload:
+        raise OpenvasCliError(
+            "report payload is empty; verify the report was generated successfully and contains data"
+        )
+    try:
+        Path(args.output).write_bytes(b64decode(payload.encode("ascii")))
+    except binascii.Error as exc:
+        raise OpenvasCliError(f"failed to decode report content: {exc}") from exc
     _json_print({"id": args.id, "output": args.output, "format_id": format_id})
 
 
