@@ -1395,13 +1395,15 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
 
     if not args.output:
         raise OpenvasCliError("binary report export requires --output")
-    # For binary formats (PDF, etc.), the base64 content sits as the tail text of the
-    # nested inner <report> element (after its closing tag, inside the outer <report>).
-    # If there is no nested report, fall back to the outer report's direct text.
+    # For binary formats (PDF, etc.), GMP payload placement varies across versions.
+    # Prefer nested inner <report> tail/text first, then fall back to outer <report> text.
     inner_el = report.find("report")
+    payload = ""
     if inner_el is not None:
         payload = (inner_el.tail or "").strip()
-    else:
+        if not payload:
+            payload = (inner_el.text or "").strip()
+    if not payload:
         payload = (report.text or "").strip()
     if not payload:
         raise OpenvasCliError(
