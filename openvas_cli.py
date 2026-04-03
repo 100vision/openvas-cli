@@ -985,9 +985,14 @@ def _report_detail_json(node: ET.Element) -> Dict:
     results = []
     for result in node.findall(".//results/result"):
         nvt = result.find("nvt")
+        # The <host> element may contain a child <asset> element with the IP address
+        # stored as the asset element's tail text (mixed content).  Use itertext() to
+        # collect the full text regardless of whether sub-elements are present.
+        host_el = result.find("host")
+        host_text = "".join(host_el.itertext()).strip() if host_el is not None else ""
         results.append({
             "id": result.attrib.get("id", ""),
-            "host": result.findtext("host", default="").strip(),
+            "host": host_text,
             "port": result.findtext("port", default=""),
             "nvt_oid": nvt.attrib.get("oid", "") if nvt is not None else "",
             "nvt_name": nvt.findtext("name", default="") if nvt is not None else "",
@@ -1354,6 +1359,23 @@ def command_report_list(args: argparse.Namespace, runner: GvmCliRunner) -> None:
 def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     format_value = args.format.lower()
     format_id = XML_REPORT_FORMAT_ID if format_value == "xml" else PDF_REPORT_FORMAT_ID if format_value == "pdf" else args.format
+
+    if format_value == "xml" and not args.output:
+        # For JSON output fetch the native GMP report (no format plugin) so that
+        # vulnerability results are directly accessible as XML child elements.
+        # filter="rows=-1" removes GMP's default result-count pagination.
+        request = _make_simple_request("get_reports", report_id=args.id)
+        request.set("filter", "rows=-1")
+        request.set("ignore_pagination", "1")
+        response = runner.invoke_xml(request)
+        report = response.first("report")
+        if report is None:
+            raise OpenvasCliError(f"report not found: {args.id}")
+        inner_el = report.find("report")
+        inner = inner_el if inner_el is not None else report
+        _json_print({"report": _report_detail_json(inner)})
+        return
+
     request = _make_simple_request("get_reports", report_id=args.id)
     if format_id:
         request.set("format_id", format_id)
@@ -1363,15 +1385,10 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     if report is None:
         raise OpenvasCliError(f"report not found: {args.id}")
 
-    inner_el = report.find("report")
-
-    if format_id == XML_REPORT_FORMAT_ID:
-        if args.output:
-            Path(args.output).write_text(response.raw_xml, encoding="utf-8")
-            _json_print({"id": args.id, "output": args.output, "format_id": format_id})
-            return
-        inner = inner_el if inner_el is not None else report
-        _json_print({"report": _report_detail_json(inner)})
+    if format_value == "xml":
+        # --output was specified: write raw XML to file
+        Path(args.output).write_text(response.raw_xml, encoding="utf-8")
+        _json_print({"id": args.id, "output": args.output, "format_id": format_id})
         return
 
     if not args.output:
@@ -1379,6 +1396,7 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     # For binary formats (PDF, etc.), the base64 content sits as the tail text of the
     # nested inner <report> element (after its closing tag, inside the outer <report>).
     # If there is no nested report, fall back to the outer report's direct text.
+    inner_el = report.find("report")
     if inner_el is not None:
         payload = (inner_el.tail or "").strip()
     else:
