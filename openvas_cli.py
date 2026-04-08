@@ -1382,6 +1382,7 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     if format_id:
         request.set("format_id", format_id)
     request.set("ignore_pagination", "1")
+    request.set("details", "1")
     response = runner.invoke_xml(request)
     report = response.first("report")
     if report is None:
@@ -1396,13 +1397,13 @@ def command_report_get(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     if not args.output:
         raise OpenvasCliError("binary report export requires --output")
     # For binary formats (PDF, etc.), the base64 content sits as the tail text of the
-    # nested inner <report> element (after its closing tag, inside the outer <report>).
-    # If there is no nested report, fall back to the outer report's direct text.
-    inner_el = report.find("report")
-    if inner_el is not None:
-        payload = (inner_el.tail or "").strip()
+    # <report_format> element inside the outer <report> element.
+    # This matches the official gvm-tools implementation.
+    report_format_elem = report.find("report_format")
+    if report_format_elem is not None:
+        payload = (report_format_elem.tail or "").strip()
     else:
-        payload = (report.text or "").strip()
+        payload = ""
     if not payload:
         raise OpenvasCliError(
             "report payload is empty; verify the report was generated successfully and contains data"
