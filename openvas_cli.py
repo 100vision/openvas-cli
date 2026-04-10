@@ -848,6 +848,10 @@ def _build_parser() -> argparse.ArgumentParser:
     scan_update.add_argument("--scanner")
     scan_update.add_argument("--alert")
 
+    scan_list = scan_subparsers.add_parser("list")
+    scan_list.add_argument("--filter")
+    scan_list.add_argument("--details", action="store_true")
+
     return parser
 
 
@@ -1872,6 +1876,9 @@ def dispatch(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         return
     if args.resource == "scan" and args.action == "update":
         command_task_update(args, runner)
+        return
+    if args.resource == "scan" and args.action == "list":
+        command_task_list(args, runner)
         return
     raise OpenvasCliError("unsupported command")
 
