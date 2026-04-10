@@ -828,6 +828,13 @@ def _build_parser() -> argparse.ArgumentParser:
     scan_create.add_argument("--task-name")
     scan_create.add_argument("--scan-config", default="Full and Fast", dest="scan_config")
     scan_create.add_argument("--scanner", default="OpenVAS Default")
+    scan_create.add_argument("--alert")
+
+    scan_start = scan_subparsers.add_parser("start")
+    _add_lookup_arguments(scan_start)
+
+    scan_stop = scan_subparsers.add_parser("stop")
+    _add_lookup_arguments(scan_stop)
 
     return parser
 
@@ -1682,7 +1689,7 @@ def command_scan_create(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         task_created = False
     except OpenvasCliError:
         _create_task(
-            argparse.Namespace(name=task_name, target=target_id, scan_config=args.scan_config, scanner=args.scanner),
+            argparse.Namespace(name=task_name, target=target_id, scan_config=args.scan_config, scanner=args.scanner, alert=args.alert),
             runner,
         )
         task = _lookup_direct_child(runner, "get_tasks", "task", "name", task_name, details=True)
@@ -1701,27 +1708,20 @@ def command_scan_create(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         if _child_attr(task, "scanner", "id") != scanner_id:
             ET.SubElement(request, "scanner", id=scanner_id)
             task_changed = True
+        if args.alert:
+            alert_id = _resolve_resource_id(runner, "get_alerts", "alert", args.alert)
+            current_alert_id = _child_attr(task, "alert", "id")
+            if current_alert_id != alert_id:
+                ET.SubElement(request, "alert", id=alert_id)
+                task_changed = True
         if task_changed:
             runner.invoke_xml(request)
             task = _lookup_direct_child(runner, "get_tasks", "task", "name", task_name, details=True)
 
-    status = task.findtext("status", default="")
-    if status in {"Running", "Requested", "Processing"}:
-        _json_print({
-            "target": _target_json(target),
-            "task": _task_json(task),
-            "report_id": _deep_attr(task, ["last_report", "report"], "id"),
-            "started": False,
-        })
-        return
-
-    start_response = runner.invoke_xml(_make_simple_request("start_task", task_id=task_id))
-    task = _lookup_direct_child(runner, "get_tasks", "task", "id", task_id, details=True)
     _json_print({
         "target": _target_json(target),
         "task": _task_json(task),
-        "report_id": start_response.root.findtext("report_id", default=""),
-        "started": True,
+        "message": "Target and task created. Use 'openvas-cli scan start --name \"{}\"' to start the scan.".format(task_name),
     })
 
 
@@ -1851,6 +1851,12 @@ def dispatch(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         return
     if args.resource == "scan" and args.action == "create":
         command_scan_create(args, runner)
+        return
+    if args.resource == "scan" and args.action == "start":
+        command_task_start(args, runner)
+        return
+    if args.resource == "scan" and args.action == "stop":
+        command_task_stop(args, runner)
         return
     raise OpenvasCliError("unsupported command")
 
