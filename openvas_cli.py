@@ -727,6 +727,7 @@ def _build_parser() -> argparse.ArgumentParser:
     task_create.add_argument("--target", required=True)
     task_create.add_argument("--scan-config", required=True, dest="scan_config")
     task_create.add_argument("--scanner")
+    task_create.add_argument("--alert")
 
     task_update = task_subparsers.add_parser("update")
     _add_lookup_arguments(task_update)
@@ -734,6 +735,7 @@ def _build_parser() -> argparse.ArgumentParser:
     task_update.add_argument("--target")
     task_update.add_argument("--scan-config", dest="scan_config")
     task_update.add_argument("--scanner")
+    task_update.add_argument("--alert")
 
     for action in ("start", "stop", "resume"):
         task_action = task_subparsers.add_parser(action)
@@ -1150,6 +1152,9 @@ def _create_task(args: argparse.Namespace, runner: GvmCliRunner) -> Dict:
     if args.scanner:
         scanner_id = _resolve_resource_id(runner, "get_scanners", "scanner", args.scanner)
         ET.SubElement(request, "scanner", id=scanner_id)
+    if args.alert:
+        alert_id = _resolve_resource_id(runner, "get_alerts", "alert", args.alert)
+        ET.SubElement(request, "alert", id=alert_id)
     response = runner.invoke_xml(request)
     return {
         "id": response.root.attrib.get("id", ""),
@@ -1308,6 +1313,9 @@ def command_task_update(args: argparse.Namespace, runner: GvmCliRunner) -> None:
     if args.scanner:
         scanner_id = _resolve_resource_id(runner, "get_scanners", "scanner", args.scanner)
         ET.SubElement(request, "scanner", id=scanner_id)
+    if args.alert:
+        alert_id = _resolve_resource_id(runner, "get_alerts", "alert", args.alert)
+        ET.SubElement(request, "alert", id=alert_id)
     if len(request) == 0:
         raise OpenvasCliError("task update requires at least one mutable field")
     response = runner.invoke_xml(request)
