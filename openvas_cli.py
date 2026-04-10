@@ -667,6 +667,10 @@ def _json_print(payload: Dict) -> None:
     print(json.dumps(payload, indent=JSON_INDENT, sort_keys=JSON_SORT_KEYS))
 
 
+def _print_deprecation_warning(resource: str, action: str, replacement: str) -> None:
+    print(f"WARNING: 'openvas-cli {resource} {action}' is deprecated. Use '{replacement}' instead.", file=sys.stderr)
+
+
 def _uuid_like(value: Optional[str]) -> bool:
     return bool(value and UUID_RE.match(value))
 
@@ -835,6 +839,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     scan_stop = scan_subparsers.add_parser("stop")
     _add_lookup_arguments(scan_stop)
+
+    scan_update = scan_subparsers.add_parser("update")
+    _add_lookup_arguments(scan_update)
+    scan_update.add_argument("--set-name")
+    scan_update.add_argument("--target")
+    scan_update.add_argument("--scan-config", dest="scan_config")
+    scan_update.add_argument("--scanner")
+    scan_update.add_argument("--alert")
 
     return parser
 
@@ -1748,24 +1760,31 @@ def dispatch(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         command_target_update(args, runner)
         return
     if args.resource == "task" and args.action == "list":
+        _print_deprecation_warning("task", "list", "openvas-cli scan list is not yet implemented, use 'openvas-cli task list' instead")
         command_task_list(args, runner)
         return
     if args.resource == "task" and args.action == "get":
+        _print_deprecation_warning("task", "get", "openvas-cli scan get is not yet implemented, use 'openvas-cli task get' instead")
         command_task_get(args, runner)
         return
     if args.resource == "task" and args.action == "create":
+        _print_deprecation_warning("task", "create", "openvas-cli scan create")
         command_task_create(args, runner)
         return
     if args.resource == "task" and args.action == "update":
+        _print_deprecation_warning("task", "update", "openvas-cli scan update")
         command_task_update(args, runner)
         return
     if args.resource == "task" and args.action == "start":
+        _print_deprecation_warning("task", "start", "openvas-cli scan start")
         command_task_start(args, runner)
         return
     if args.resource == "task" and args.action == "stop":
+        _print_deprecation_warning("task", "stop", "openvas-cli scan stop")
         command_task_stop(args, runner)
         return
     if args.resource == "task" and args.action == "resume":
+        _print_deprecation_warning("task", "resume", "openvas-cli scan resume (not yet implemented)")
         command_task_resume(args, runner)
         return
     if args.resource == "report" and args.action == "list":
@@ -1857,6 +1876,9 @@ def dispatch(args: argparse.Namespace, runner: GvmCliRunner) -> None:
         return
     if args.resource == "scan" and args.action == "stop":
         command_task_stop(args, runner)
+        return
+    if args.resource == "scan" and args.action == "update":
+        command_task_update(args, runner)
         return
     raise OpenvasCliError("unsupported command")
 
